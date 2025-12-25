@@ -13,10 +13,12 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['create_driver'])) {
     $password = password_hash($_POST['driver_password'], PASSWORD_BCRYPT);
     $stmt = $conn->prepare("INSERT INTO drivers (name, email, password) VALUES (?, ?, ?)");
     $stmt->bind_param("sss", $name, $email, $password);
-    $stmt->execute();
+    if ($stmt->execute()) {
+        $success_message = "Driver created successfully!";
+    } else {
+        $error_message = "Error creating driver.";
+    }
     $stmt->close();
-    header("Location: admin_dashboard.php");
-    exit();
 }
 
 // Handle Assign Driver form submission
@@ -26,12 +28,42 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['assign_driver'])) {
     if (!empty($driver_id)) {
         $stmt = $conn->prepare("UPDATE pickups SET driver_id = ?, status = 'Assigned' WHERE id = ?");
         $stmt->bind_param("ii", $driver_id, $pickup_id);
-        $stmt->execute();
+        if ($stmt->execute()) {
+            $success_message = "Driver assigned successfully!";
+        }
         $stmt->close();
     }
-    header("Location: admin_dashboard.php");
-    exit();
 }
+
+// Get today's date
+$today = date('Y-m-d');
+
+// Fetch total pickups for today
+$today_pickups_sql = "SELECT COUNT(*) as total FROM pickups WHERE DATE(pickup_date) = ?";
+$stmt_today = $conn->prepare($today_pickups_sql);
+$stmt_today->bind_param("s", $today);
+$stmt_today->execute();
+$today_result = $stmt_today->get_result();
+$today_pickups = $today_result->fetch_assoc()['total'];
+$stmt_today->close();
+
+// Fetch completed pickups for today
+$completed_today_sql = "SELECT COUNT(*) as total FROM pickups WHERE DATE(pickup_date) = ? AND status = 'Completed'";
+$stmt_completed = $conn->prepare($completed_today_sql);
+$stmt_completed->bind_param("s", $today);
+$stmt_completed->execute();
+$completed_result = $stmt_completed->get_result();
+$completed_today = $completed_result->fetch_assoc()['total'];
+$stmt_completed->close();
+
+// Fetch pending pickups for today
+$pending_today_sql = "SELECT COUNT(*) as total FROM pickups WHERE DATE(pickup_date) = ? AND status IN ('Scheduled', 'Assigned')";
+$stmt_pending = $conn->prepare($pending_today_sql);
+$stmt_pending->bind_param("s", $today);
+$stmt_pending->execute();
+$pending_result = $stmt_pending->get_result();
+$pending_today = $pending_result->fetch_assoc()['total'];
+$stmt_pending->close();
 
 // Fetch all pickups with user and driver names
 $pickups_sql = "SELECT p.*, u.name as user_name, d.name as driver_name 
@@ -53,7 +85,7 @@ $all_people_sql = "(SELECT name, email, created_at, 'User' as role FROM users WH
 $people_result = $conn->query($all_people_sql);
 ?>
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -61,6 +93,7 @@ $people_result = $conn->query($all_people_sql);
     <link rel="stylesheet" href="style.css">
     <link rel="stylesheet" href="dashboard-style.css">
     <link rel="stylesheet" href="admin-style.css">
+    <link rel="stylesheet" href="theme.css">
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
@@ -68,6 +101,7 @@ $people_result = $conn->query($all_people_sql);
         <nav>
             <div class="container">
                 <a href="admin_dashboard.php" class="logo">EcoWaste Admin</a>
+                <button id="theme-toggle" class="theme-toggle" aria-label="Toggle theme"></button>
                 <ul class="nav-links">
                     <li><a href="logout.php" class="btn btn-secondary">Logout</a></li>
                 </ul>
@@ -78,6 +112,49 @@ $people_result = $conn->query($all_people_sql);
         <div class="container">
             <div class="dashboard-header">
                 <h1>Welcome, <?= htmlspecialchars($_SESSION['admin_name']) ?>!</h1>
+            </div>
+
+            <!-- Daily Stats Cards -->
+            <div class="stats-grid">
+                <div class="stat-card stat-primary">
+                    <div class="stat-icon">
+                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+                            <line x1="16" y1="2" x2="16" y2="6"/>
+                            <line x1="8" y1="2" x2="8" y2="6"/>
+                            <line x1="3" y1="10" x2="21" y2="10"/>
+                        </svg>
+                    </div>
+                    <div class="stat-content">
+                        <div class="stat-label">Today's Pickups</div>
+                        <div class="stat-value"><?= $today_pickups ?></div>
+                    </div>
+                </div>
+
+                <div class="stat-card stat-success">
+                    <div class="stat-icon">
+                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="20 6 9 17 4 12"/>
+                        </svg>
+                    </div>
+                    <div class="stat-content">
+                        <div class="stat-label">Completed Today</div>
+                        <div class="stat-value"><?= $completed_today ?></div>
+                    </div>
+                </div>
+
+                <div class="stat-card stat-warning">
+                    <div class="stat-icon">
+                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"/>
+                            <polyline points="12 6 12 12 16 14"/>
+                        </svg>
+                    </div>
+                    <div class="stat-content">
+                        <div class="stat-label">Pending Today</div>
+                        <div class="stat-value"><?= $pending_today ?></div>
+                    </div>
+                </div>
             </div>
 
             <section class="dashboard-section">
@@ -109,7 +186,7 @@ $people_result = $conn->query($all_people_sql);
                                 </td>
                                 <td data-label="Action">
                                     <?php if ($row['status'] == 'Scheduled'): ?>
-                                    <form method="POST" action="admin_dashboard.php" class="status-form">
+                                    <form method="POST" action="admin_dashboard.php" class="status-form" onsubmit="return validateAssign(this)">
                                         <input type="hidden" name="pickup_id" value="<?= $row['id'] ?>">
                                         <select name="driver_id" required>
                                             <option value="">Select Driver</option>
@@ -120,7 +197,7 @@ $people_result = $conn->query($all_people_sql);
                                         <button type="submit" name="assign_driver">Assign</button>
                                     </form>
                                     <?php elseif ($row['status'] == 'Collected' || $row['status'] == 'Collected by Driver'): ?>
-                                    <form action="update_status.php" method="POST" class="status-form">
+                                    <form action="update_status.php" method="POST" class="status-form" onsubmit="return validateStatus(this)">
                                         <input type="hidden" name="pickup_id" value="<?= $row['id'] ?>">
                                         <select name="new_status">
                                             <option value="Completed">Completed</option>
@@ -141,9 +218,10 @@ $people_result = $conn->query($all_people_sql);
             
             <section class="dashboard-section">
                 <h2>Manage Drivers</h2>
-                <form action="admin_dashboard.php" method="post" class="pickup-form">
+                <form action="admin_dashboard.php" method="post" class="pickup-form" onsubmit="return validateDriverForm(this)">
                     <h3>Create New Driver</h3>
-                    <div class="form-row-compact"> <div class="form-group">
+                    <div class="form-row-compact">
+                        <div class="form-group">
                             <label for="driver_name">Driver Name</label>
                             <input type="text" id="driver_name" name="driver_name" required>
                         </div>
@@ -155,11 +233,12 @@ $people_result = $conn->query($all_people_sql);
                             <label for="driver_password">Password</label>
                             <input type="password" id="driver_password" name="driver_password" required>
                         </div>
-                    </div> <button type="submit" name="create_driver" class="btn btn-primary" >Add Driver</button>
+                    </div>
+                    <button type="submit" name="create_driver" class="btn btn-primary">Add Driver</button>
                 </form>
             </section>
 
-             <section class="dashboard-section">
+            <section class="dashboard-section">
                 <h2>All Users & Drivers</h2>
                 <div class="table-container">
                     <table>
@@ -172,7 +251,7 @@ $people_result = $conn->query($all_people_sql);
                             </tr>
                         </thead>
                         <tbody>
-                             <?php if ($people_result->num_rows > 0): ?>
+                            <?php if ($people_result->num_rows > 0): ?>
                                 <?php while($row = $people_result->fetch_assoc()): ?>
                                 <tr>
                                     <td data-label="Name"><?= htmlspecialchars($row['name']) ?></td>
@@ -194,5 +273,47 @@ $people_result = $conn->query($all_people_sql);
             </section>
         </div>
     </main>
+
+    <script src="theme.js"></script>
+    <script>
+        <?php if (isset($success_message)): ?>
+            showAlert('<?= addslashes($success_message) ?>', 'success');
+        <?php endif; ?>
+        
+        <?php if (isset($error_message)): ?>
+            showAlert('<?= addslashes($error_message) ?>', 'error');
+        <?php endif; ?>
+
+        function validateAssign(form) {
+            const driver = form.querySelector('select[name="driver_id"]').value;
+            if (!driver) {
+                showAlert('Please select a driver', 'warning');
+                return false;
+            }
+            return true;
+        }
+
+        function validateStatus(form) {
+            const status = form.querySelector('select[name="new_status"]').value;
+            if (!status) {
+                showAlert('Please select a status', 'warning');
+                return false;
+            }
+            return true;
+        }
+
+        function validateDriverForm(form) {
+            const name = form.querySelector('#driver_name').value.trim();
+            const email = form.querySelector('#driver_email').value.trim();
+            const password = form.querySelector('#driver_password').value.trim();
+            
+            if (!name || !email || !password) {
+                showAlert('All fields are required', 'warning');
+                return false;
+            }
+            
+            return true;
+        }
+    </script>
 </body>
 </html>

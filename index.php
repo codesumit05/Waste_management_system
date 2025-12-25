@@ -1,10 +1,11 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>EcoWaste Solutions - Modern Waste Management</title>
     <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="theme.css">
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
@@ -13,14 +14,16 @@
         <nav>
             <div class="container">
                 <a href="#" class="logo">EcoWaste</a>
-                    <ul class="nav-links">
-                        <li><a href="#about">About Us</a></li>
-                        <li><a href="#services">Services</a></li>
-                        <li><a href="#how-it-works">How It Works</a></li>
-                        <li><a href="#contact">Contact</a></li>
-                        <li><a href="login.php" class="btn btn-primary">Login</a></li>
-                        <li><a href="admin_login.php" class="btn btn-secondary"><strong>Admin Login</strong></a></li>
-                    </ul>
+                <button id="theme-toggle" class="theme-toggle" aria-label="Toggle theme"></button>
+                <ul class="nav-links">
+                    <li><a href="#about">About Us</a></li>
+                    <li><a href="#services">Services</a></li>
+                    <li><a href="#how-it-works">How It Works</a></li>
+                    <li><a href="#contact">Contact</a></li>
+                    <li><a href="login.php" class="btn btn-primary">User Login</a></li>
+                    <li><a href="driver_login.php" class="btn btn-secondary">Driver Login</a></li>
+                    <li><a href="admin_login.php" class="btn btn-secondary">Admin Login</a></li>
+                </ul>
             </div>
         </nav>
     </header>
@@ -104,21 +107,17 @@
         </div>
     </footer>
 
-    <script src="script.js">
+    <script src="theme.js"></script>
+    <script>
         document.addEventListener('DOMContentLoaded', function() {
-    const contactForm = document.getElementById('contact-form');
+            const contactForm = document.getElementById('contact-form');
 
-    contactForm.addEventListener('submit', function(e) {
-        // Prevent the default form submission
-        e.preventDefault();
-
-        // Show a confirmation message
-        alert('Thank you for your message! We will get back to you soon.');
-
-        // Clear the form fields
-        contactForm.reset();
-    });
-});
+            contactForm.addEventListener('submit', function(e) {
+                e.preventDefault();
+                showAlert('Thank you for your message! We will get back to you soon.', 'success');
+                contactForm.reset();
+            });
+        });
     </script>
 </body>
 </html>
