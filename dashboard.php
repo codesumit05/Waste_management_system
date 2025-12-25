@@ -33,9 +33,35 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['pickup_date'])) {
     $stmt->close();
 }
 
+// Mark notification as read
+if (isset($_GET['mark_read']) && isset($_GET['notif_id'])) {
+    $notif_id = intval($_GET['notif_id']);
+    $stmt = $conn->prepare("UPDATE notifications SET is_read = TRUE WHERE id = ? AND user_id = ?");
+    $stmt->bind_param("ii", $notif_id, $user_id);
+    $stmt->execute();
+    $stmt->close();
+    header("Location: dashboard.php");
+    exit();
+}
+
+// Fetch notifications
+$notif_sql = "SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 10";
+$stmt_notif = $conn->prepare($notif_sql);
+$stmt_notif->bind_param("i", $user_id);
+$stmt_notif->execute();
+$notifications = $stmt_notif->get_result();
+
+// Count unread notifications
+$unread_sql = "SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = FALSE";
+$stmt_unread = $conn->prepare($unread_sql);
+$stmt_unread->bind_param("i", $user_id);
+$stmt_unread->execute();
+$unread_count = $stmt_unread->get_result()->fetch_assoc()['count'];
+$stmt_unread->close();
+
 // Fetch upcoming pickups
 $upcoming_sql = "SELECT id, pickup_date, time_slot, waste_type, status, latitude, longitude FROM pickups 
-                 WHERE user_id = ? AND status = 'Scheduled' AND pickup_date >= CURDATE()
+                 WHERE user_id = ? AND status IN ('Scheduled', 'Assigned') AND pickup_date >= CURDATE()
                  ORDER BY pickup_date ASC";
 $stmt_upcoming = $conn->prepare($upcoming_sql);
 $stmt_upcoming->bind_param("i", $user_id);
@@ -44,7 +70,7 @@ $upcoming_result = $stmt_upcoming->get_result();
 
 // Fetch pickup history
 $history_sql = "SELECT pickup_date, time_slot, waste_type, status FROM pickups 
-                WHERE user_id = ? AND (status != 'Scheduled' OR pickup_date < CURDATE())
+                WHERE user_id = ? AND (status NOT IN ('Scheduled', 'Assigned') OR pickup_date < CURDATE())
                 ORDER BY updated_at DESC";
 $stmt_history = $conn->prepare($history_sql);
 $stmt_history->bind_param("i", $user_id);
@@ -73,6 +99,36 @@ $history_result = $stmt_history->get_result();
             border: 2px solid var(--border-color);
             margin-bottom: 1.5rem;
             z-index: 1;
+        }
+        .search-container {
+            position: relative;
+            margin-bottom: 1rem;
+        }
+        .search-input {
+            width: 100%;
+            padding: 1rem 3rem 1rem 1.25rem;
+            background: var(--bg-tertiary);
+            border: 2px solid var(--border-color);
+            border-radius: 12px;
+            color: var(--text-primary);
+            font-size: 0.95rem;
+        }
+        .search-input:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 20px rgba(14, 165, 233, 0.2);
+        }
+        .search-btn {
+            position: absolute;
+            right: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            border: none;
+            padding: 0.625rem 1rem;
+            border-radius: 8px;
+            cursor: pointer;
+            color: white;
         }
         .location-info {
             background: var(--bg-tertiary);
@@ -121,6 +177,81 @@ $history_result = $stmt_history->get_result();
             color: var(--text-secondary);
             font-size: 0.9rem;
         }
+        .notification-bell {
+            position: relative;
+            cursor: pointer;
+            padding: 0.5rem;
+        }
+        .notification-badge {
+            position: absolute;
+            top: 0;
+            right: 0;
+            background: linear-gradient(135deg, #ef4444, #dc2626);
+            color: white;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.7rem;
+            font-weight: 700;
+        }
+        .notification-dropdown {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            margin-top: 0.5rem;
+            width: 380px;
+            max-height: 500px;
+            overflow-y: auto;
+            background: var(--bg-secondary);
+            border: 2px solid var(--border-color);
+            border-radius: 16px;
+            box-shadow: 0 10px 40px var(--shadow-color);
+            display: none;
+            z-index: 1000;
+        }
+        .notification-dropdown.show {
+            display: block;
+        }
+        .notification-header {
+            padding: 1rem 1.25rem;
+            border-bottom: 1px solid var(--border-color);
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+        .notification-item {
+            padding: 1rem 1.25rem;
+            border-bottom: 1px solid var(--border-color);
+            cursor: pointer;
+            transition: background 0.2s ease;
+        }
+        .notification-item:hover {
+            background: var(--bg-tertiary);
+        }
+        .notification-item.unread {
+            background: rgba(14, 165, 233, 0.05);
+        }
+        .notification-title {
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 0.25rem;
+        }
+        .notification-message {
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.5rem;
+        }
+        .notification-time {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+        }
+        .notification-empty {
+            padding: 2rem;
+            text-align: center;
+            color: var(--text-secondary);
+        }
     </style>
 </head>
 <body>
@@ -130,6 +261,32 @@ $history_result = $stmt_history->get_result();
                 <a href="index.php" class="logo">EcoWaste</a>
                 <button id="theme-toggle" class="theme-toggle" aria-label="Toggle theme"></button>
                 <ul class="nav-links">
+                    <li style="position: relative;">
+                        <div class="notification-bell" onclick="toggleNotifications()">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+                                <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+                            </svg>
+                            <?php if ($unread_count > 0): ?>
+                            <span class="notification-badge"><?= $unread_count ?></span>
+                            <?php endif; ?>
+                        </div>
+                        <div class="notification-dropdown" id="notificationDropdown">
+                            <div class="notification-header">Notifications</div>
+                            <?php if ($notifications->num_rows > 0): ?>
+                                <?php while($notif = $notifications->fetch_assoc()): ?>
+                                <div class="notification-item <?= !$notif['is_read'] ? 'unread' : '' ?>" 
+                                     onclick="markAsRead(<?= $notif['id'] ?>)">
+                                    <div class="notification-title"><?= htmlspecialchars($notif['title']) ?></div>
+                                    <div class="notification-message"><?= htmlspecialchars($notif['message']) ?></div>
+                                    <div class="notification-time"><?= date('M j, Y g:i A', strtotime($notif['created_at'])) ?></div>
+                                </div>
+                                <?php endwhile; ?>
+                            <?php else: ?>
+                                <div class="notification-empty">No notifications</div>
+                            <?php endif; ?>
+                        </div>
+                    </li>
                     <li><a href="logout.php" class="btn btn-secondary">Logout</a></li>
                 </ul>
             </div>
@@ -164,7 +321,7 @@ $history_result = $stmt_history->get_result();
                                     <td data-label="Date"><?= htmlspecialchars($row['pickup_date']) ?></td>
                                     <td data-label="Time Slot"><?= htmlspecialchars($row['time_slot']) ?></td>
                                     <td data-label="Waste Type"><?= htmlspecialchars($row['waste_type']) ?></td>
-                                    <td data-label="Status"><span class="status-badge status-scheduled"><?= htmlspecialchars($row['status']) ?></span></td>
+                                    <td data-label="Status"><span class="status-badge status-<?= strtolower(str_replace(' ', '-', $row['status'])) ?>"><?= htmlspecialchars($row['status']) ?></span></td>
                                     <td data-label="Location">
                                         <?php if ($row['latitude'] && $row['longitude']): ?>
                                             <button class="btn-collect" onclick="showLocationModal(<?= $row['latitude'] ?>, <?= $row['longitude'] ?>)">View Map</button>
@@ -173,10 +330,14 @@ $history_result = $stmt_history->get_result();
                                         <?php endif; ?>
                                     </td>
                                     <td data-label="Action">
+                                        <?php if ($row['status'] == 'Scheduled'): ?>
                                         <form action="cancel_pickup.php" method="POST" onsubmit="return confirmCancel(event, this)">
                                             <input type="hidden" name="pickup_id" value="<?= $row['id'] ?>">
                                             <button type="submit" class="btn-cancel">Cancel</button>
                                         </form>
+                                        <?php else: ?>
+                                            <span style="color: var(--text-secondary);">Assigned</span>
+                                        <?php endif; ?>
                                     </td>
                                 </tr>
                                 <?php endwhile; ?>
@@ -208,7 +369,7 @@ $history_result = $stmt_history->get_result();
                                     <td data-label="Time Slot"><?= htmlspecialchars($row['time_slot']) ?></td>
                                     <td data-label="Waste Type"><?= htmlspecialchars($row['waste_type']) ?></td>
                                     <td data-label="Status">
-                                        <span class="status-badge status-<?= strtolower($row['status']) ?>">
+                                        <span class="status-badge status-<?= strtolower(str_replace(' ', '-', $row['status'])) ?>">
                                             <?= htmlspecialchars($row['status']) ?>
                                         </span>
                                     </td>
@@ -226,7 +387,17 @@ $history_result = $stmt_history->get_result();
                 <h2>Request a New Pickup</h2>
                 
                 <div class="map-instructions">
-                    <p>📍 Click "Get My Location" or click on the map to pin your exact pickup location</p>
+                    <p>📍 Search for your location, click "Get My Location", or click directly on the map to pin your pickup location</p>
+                </div>
+
+                <div class="search-container">
+                    <input type="text" id="searchInput" class="search-input" placeholder="Search for a location (e.g., Bhopal Railway Station)">
+                    <button type="button" class="search-btn" onclick="searchLocation()">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="11" cy="11" r="8"/>
+                            <path d="m21 21-4.35-4.35"/>
+                        </svg>
+                    </button>
                 </div>
 
                 <button type="button" class="btn-get-location" onclick="getCurrentLocation()">
@@ -305,16 +476,30 @@ $history_result = $stmt_history->get_result();
         let marker;
         let viewMapInstance;
 
-        // Initialize map
+        function toggleNotifications() {
+            const dropdown = document.getElementById('notificationDropdown');
+            dropdown.classList.toggle('show');
+        }
+
+        document.addEventListener('click', function(event) {
+            const bell = document.querySelector('.notification-bell');
+            const dropdown = document.getElementById('notificationDropdown');
+            if (bell && dropdown && !bell.contains(event.target) && !dropdown.contains(event.target)) {
+                dropdown.classList.remove('show');
+            }
+        });
+
+        function markAsRead(notifId) {
+            window.location.href = `dashboard.php?mark_read=1&notif_id=${notifId}`;
+        }
+
         function initMap() {
-            // Default to Bhopal, India
             map = L.map('map').setView([23.2599, 77.4126], 13);
             
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                 attribution: '© OpenStreetMap contributors'
             }).addTo(map);
 
-            // Add click event to map
             map.on('click', function(e) {
                 setMarker(e.latlng.lat, e.latlng.lng);
             });
@@ -353,6 +538,38 @@ $history_result = $stmt_history->get_result();
             }
         }
 
+        async function searchLocation() {
+            const query = document.getElementById('searchInput').value;
+            if (!query) {
+                showAlert('Please enter a location to search', 'warning');
+                return;
+            }
+
+            try {
+                const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}`);
+                const data = await response.json();
+                
+                if (data && data.length > 0) {
+                    const lat = parseFloat(data[0].lat);
+                    const lng = parseFloat(data[0].lon);
+                    map.setView([lat, lng], 15);
+                    setMarker(lat, lng);
+                    showAlert('Location found!', 'success');
+                } else {
+                    showAlert('Location not found. Please try a different search.', 'warning');
+                }
+            } catch (error) {
+                showAlert('Error searching location. Please try again.', 'error');
+            }
+        }
+
+        document.getElementById('searchInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                searchLocation();
+            }
+        });
+
         function showLocationModal(lat, lng) {
             const modal = document.getElementById('locationModal');
             modal.style.display = 'flex';
@@ -379,7 +596,6 @@ $history_result = $stmt_history->get_result();
             document.getElementById('locationModal').style.display = 'none';
         }
 
-        // Initialize map on page load
         document.addEventListener('DOMContentLoaded', initMap);
 
         <?php if (!empty($message)): ?>
@@ -421,5 +637,6 @@ $history_result = $stmt_history->get_result();
 <?php 
     $stmt_upcoming->close();
     $stmt_history->close();
+    $stmt_notif->close();
     $conn->close(); 
 ?>

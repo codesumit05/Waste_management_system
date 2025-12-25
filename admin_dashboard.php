@@ -6,6 +6,9 @@ if (!isset($_SESSION["admin_id"])) {
     exit();
 }
 
+$success_message = '';
+$error_message = '';
+
 // Handle Create Driver form submission
 if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['create_driver'])) {
     $name = $_POST['driver_name'];
@@ -15,6 +18,13 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['create_driver'])) {
     $stmt->bind_param("sss", $name, $email, $password);
     if ($stmt->execute()) {
         $success_message = "Driver created successfully!";
+        
+        // Create notification for new driver
+        $driver_id = $conn->insert_id;
+        $notif_stmt = $conn->prepare("INSERT INTO notifications (driver_id, title, message, type) VALUES (?, 'Welcome to EcoWaste', 'You have been registered as a driver. You will receive pickup assignments soon.', 'info')");
+        $notif_stmt->bind_param("i", $driver_id);
+        $notif_stmt->execute();
+        $notif_stmt->close();
     } else {
         $error_message = "Error creating driver.";
     }
@@ -26,13 +36,63 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['assign_driver'])) {
     $pickup_id = $_POST['pickup_id'];
     $driver_id = $_POST['driver_id'];
     if (!empty($driver_id)) {
+        // Get pickup and user details
+        $pickup_stmt = $conn->prepare("SELECT p.*, u.name as user_name, d.name as driver_name FROM pickups p JOIN users u ON p.user_id = u.id JOIN drivers d ON d.id = ? WHERE p.id = ?");
+        $pickup_stmt->bind_param("ii", $driver_id, $pickup_id);
+        $pickup_stmt->execute();
+        $pickup_data = $pickup_stmt->get_result()->fetch_assoc();
+        $pickup_stmt->close();
+        
         $stmt = $conn->prepare("UPDATE pickups SET driver_id = ?, status = 'Assigned' WHERE id = ?");
         $stmt->bind_param("ii", $driver_id, $pickup_id);
         if ($stmt->execute()) {
             $success_message = "Driver assigned successfully!";
+            
+            // Create notifications for user and driver
+            $user_notif = $conn->prepare("INSERT INTO notifications (user_id, title, message, type) VALUES (?, 'Driver Assigned', 'A driver has been assigned to your pickup on {$pickup_data['pickup_date']}. Driver: {$pickup_data['driver_name']}', 'success')");
+            $user_notif->bind_param("i", $pickup_data['user_id']);
+            $user_notif->execute();
+            $user_notif->close();
+            
+            $driver_notif = $conn->prepare("INSERT INTO notifications (driver_id, title, message, type) VALUES (?, 'New Pickup Assigned', 'You have been assigned a new pickup from {$pickup_data['user_name']} on {$pickup_data['pickup_date']} at {$pickup_data['area']}, {$pickup_data['city']}.', 'info')");
+            $driver_notif->bind_param("i", $driver_id);
+            $driver_notif->execute();
+            $driver_notif->close();
         }
         $stmt->close();
     }
+}
+
+// Handle Delete User
+if (isset($_GET['delete_user'])) {
+    $user_id = intval($_GET['delete_user']);
+    $stmt = $conn->prepare("UPDATE users SET is_deleted = TRUE, deleted_at = NOW() WHERE id = ? AND is_admin = FALSE");
+    $stmt->bind_param("i", $user_id);
+    if ($stmt->execute()) {
+        $success_message = "User deleted successfully!";
+    }
+    $stmt->close();
+    header("Location: admin_dashboard.php");
+    exit();
+}
+
+// Handle Fire Driver
+if (isset($_GET['fire_driver'])) {
+    $driver_id = intval($_GET['fire_driver']);
+    $stmt = $conn->prepare("UPDATE drivers SET is_deleted = TRUE, deleted_at = NOW() WHERE id = ?");
+    $stmt->bind_param("i", $driver_id);
+    if ($stmt->execute()) {
+        $success_message = "Driver removed successfully!";
+        
+        // Notify driver
+        $notif_stmt = $conn->prepare("INSERT INTO notifications (driver_id, title, message, type) VALUES (?, 'Account Status', 'Your driver account has been deactivated.', 'warning')");
+        $notif_stmt->bind_param("i", $driver_id);
+        $notif_stmt->execute();
+        $notif_stmt->close();
+    }
+    $stmt->close();
+    header("Location: admin_dashboard.php");
+    exit();
 }
 
 // Get today's date
@@ -70,19 +130,21 @@ $pickups_sql = "SELECT p.*, u.name as user_name, d.name as driver_name
                 FROM pickups p 
                 JOIN users u ON p.user_id = u.id
                 LEFT JOIN drivers d ON p.driver_id = d.id
+                WHERE u.is_deleted = FALSE
                 ORDER BY p.requested_at DESC";
 $pickups_result = $conn->query($pickups_sql);
 
-// Fetch all drivers for the dropdown
-$drivers_result = $conn->query("SELECT id, name FROM drivers");
+// Fetch all active drivers for the dropdown
+$drivers_result = $conn->query("SELECT id, name FROM drivers WHERE is_deleted = FALSE");
 $drivers_list = $drivers_result->fetch_all(MYSQLI_ASSOC);
 
-// Fetch ALL people (Users and Drivers) into one list
-$all_people_sql = "(SELECT name, email, created_at, 'User' as role FROM users WHERE is_admin = FALSE)
-                   UNION ALL
-                   (SELECT name, email, created_at, 'Driver' as role FROM drivers)
-                   ORDER BY created_at DESC";
-$people_result = $conn->query($all_people_sql);
+// Fetch active users
+$users_sql = "SELECT name, email, created_at, id FROM users WHERE is_admin = FALSE AND is_deleted = FALSE ORDER BY created_at DESC";
+$users_result = $conn->query($users_sql);
+
+// Fetch active drivers
+$all_drivers_sql = "SELECT name, email, created_at, id FROM drivers WHERE is_deleted = FALSE ORDER BY created_at DESC";
+$all_drivers_result = $conn->query($all_drivers_sql);
 ?>
 <!DOCTYPE html>
 <html lang="en" data-theme="dark">
@@ -95,6 +157,62 @@ $people_result = $conn->query($all_people_sql);
     <link rel="stylesheet" href="admin-style.css">
     <link rel="stylesheet" href="theme.css">
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        .btn-delete {
+            background: linear-gradient(135deg, #ef4444, #dc2626);
+            color: white;
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+        .btn-delete:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(239, 68, 68, 0.4);
+        }
+        .action-buttons {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+        .tabs {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+            border-bottom: 2px solid var(--border-color);
+        }
+        .tab {
+            padding: 1rem 1.5rem;
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-weight: 600;
+            position: relative;
+            transition: all 0.3s ease;
+        }
+        .tab.active {
+            color: var(--primary);
+        }
+        .tab.active::after {
+            content: '';
+            position: absolute;
+            bottom: -2px;
+            left: 0;
+            width: 100%;
+            height: 2px;
+            background: var(--primary);
+        }
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+    </style>
 </head>
 <body>
     <header>
@@ -164,6 +282,7 @@ $people_result = $conn->query($all_people_sql);
                         <thead>
                             <tr>
                                 <th>User & Location</th>
+                                <th>Date & Time</th>
                                 <th>Status</th>
                                 <th>Assigned To</th>
                                 <th>Action</th>
@@ -175,6 +294,10 @@ $people_result = $conn->query($all_people_sql);
                                 <td data-label="User & Location">
                                     <?= htmlspecialchars($row['user_name']) ?><br>
                                     <small><?= htmlspecialchars($row['area']) ?>, <?= htmlspecialchars($row['city']) ?></small>
+                                </td>
+                                <td data-label="Date & Time">
+                                    <?= htmlspecialchars($row['pickup_date']) ?><br>
+                                    <small><?= htmlspecialchars($row['time_slot']) ?></small>
                                 </td>
                                 <td data-label="Status">
                                     <span class="status-badge status-<?= strtolower(str_replace(' ', '-', $row['status'])) ?>">
@@ -209,7 +332,7 @@ $people_result = $conn->query($all_people_sql);
                                 </td>
                             </tr>
                             <?php endwhile; else: ?>
-                                <tr><td colspan="4">No pickup requests found.</td></tr>
+                                <tr><td colspan="5">No pickup requests found.</td></tr>
                             <?php endif; ?>
                         </tbody>
                     </table>
@@ -239,36 +362,75 @@ $people_result = $conn->query($all_people_sql);
             </section>
 
             <section class="dashboard-section">
-                <h2>All Users & Drivers</h2>
-                <div class="table-container">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Name</th>
-                                <th>Email</th>
-                                <th>Role</th>
-                                <th>Registration Date</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php if ($people_result->num_rows > 0): ?>
-                                <?php while($row = $people_result->fetch_assoc()): ?>
+                <h2>Manage Users & Drivers</h2>
+                
+                <div class="tabs">
+                    <button class="tab active" onclick="switchTab('users')">Users</button>
+                    <button class="tab" onclick="switchTab('drivers')">Drivers</button>
+                </div>
+
+                <!-- Users Tab -->
+                <div id="users-tab" class="tab-content active">
+                    <div class="table-container">
+                        <table>
+                            <thead>
                                 <tr>
-                                    <td data-label="Name"><?= htmlspecialchars($row['name']) ?></td>
-                                    <td data-label="Email"><?= htmlspecialchars($row['email']) ?></td>
-                                    <td data-label="Role">
-                                        <span class="role-badge role-<?= strtolower($row['role']) ?>">
-                                            <?= htmlspecialchars($row['role']) ?>
-                                        </span>
-                                    </td>
-                                    <td data-label="Registration Date"><?= date("M j, Y", strtotime($row['created_at'])) ?></td>
+                                    <th>Name</th>
+                                    <th>Email</th>
+                                    <th>Registration Date</th>
+                                    <th>Action</th>
                                 </tr>
-                                <?php endwhile; ?>
-                            <?php else: ?>
-                                <tr><td colspan="4">No users or drivers found.</td></tr>
-                            <?php endif; ?>
-                        </tbody>
-                    </table>
+                            </thead>
+                            <tbody>
+                                <?php if ($users_result->num_rows > 0): ?>
+                                    <?php while($row = $users_result->fetch_assoc()): ?>
+                                    <tr>
+                                        <td data-label="Name"><?= htmlspecialchars($row['name']) ?></td>
+                                        <td data-label="Email"><?= htmlspecialchars($row['email']) ?></td>
+                                        <td data-label="Registration Date"><?= date("M j, Y", strtotime($row['created_at'])) ?></td>
+                                        <td data-label="Action">
+                                            <button class="btn-delete" onclick="confirmDelete('user', <?= $row['id'] ?>, '<?= htmlspecialchars($row['name']) ?>')">Delete User</button>
+                                        </td>
+                                    </tr>
+                                    <?php endwhile; ?>
+                                <?php else: ?>
+                                    <tr><td colspan="4">No users found.</td></tr>
+                                <?php endif; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Drivers Tab -->
+                <div id="drivers-tab" class="tab-content">
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Email</th>
+                                    <th>Registration Date</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php if ($all_drivers_result->num_rows > 0): ?>
+                                    <?php while($row = $all_drivers_result->fetch_assoc()): ?>
+                                    <tr>
+                                        <td data-label="Name"><?= htmlspecialchars($row['name']) ?></td>
+                                        <td data-label="Email"><?= htmlspecialchars($row['email']) ?></td>
+                                        <td data-label="Registration Date"><?= date("M j, Y", strtotime($row['created_at'])) ?></td>
+                                        <td data-label="Action">
+                                            <button class="btn-delete" onclick="confirmDelete('driver', <?= $row['id'] ?>, '<?= htmlspecialchars($row['name']) ?>')">Fire Driver</button>
+                                        </td>
+                                    </tr>
+                                    <?php endwhile; ?>
+                                <?php else: ?>
+                                    <tr><td colspan="4">No drivers found.</td></tr>
+                                <?php endif; ?>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             </section>
         </div>
@@ -276,13 +438,32 @@ $people_result = $conn->query($all_people_sql);
 
     <script src="theme.js"></script>
     <script>
-        <?php if (isset($success_message)): ?>
+        <?php if (isset($success_message) && $success_message): ?>
             showAlert('<?= addslashes($success_message) ?>', 'success');
         <?php endif; ?>
         
-        <?php if (isset($error_message)): ?>
+        <?php if (isset($error_message) && $error_message): ?>
             showAlert('<?= addslashes($error_message) ?>', 'error');
         <?php endif; ?>
+
+        function switchTab(tab) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            
+            event.target.classList.add('active');
+            document.getElementById(tab + '-tab').classList.add('active');
+        }
+
+        function confirmDelete(type, id, name) {
+            const message = type === 'user' 
+                ? `Are you sure you want to delete user "${name}"? This action cannot be undone.`
+                : `Are you sure you want to fire driver "${name}"? This action cannot be undone.`;
+            
+            showConfirm(message, () => {
+                const param = type === 'user' ? 'delete_user' : 'fire_driver';
+                window.location.href = `admin_dashboard.php?${param}=${id}`;
+            });
+        }
 
         function validateAssign(form) {
             const driver = form.querySelector('select[name="driver_id"]').value;
