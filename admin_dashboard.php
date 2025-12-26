@@ -6,8 +6,20 @@ if (!isset($_SESSION["admin_id"])) {
     exit();
 }
 
+$admin_id = $_SESSION['admin_id'];
 $success_message = '';
 $error_message = '';
+
+// Mark notification as read
+if (isset($_GET['mark_read']) && isset($_GET['notif_id'])) {
+    $notif_id = intval($_GET['notif_id']);
+    $stmt = $conn->prepare("UPDATE notifications SET is_read = TRUE WHERE id = ? AND admin_id = ?");
+    $stmt->bind_param("ii", $notif_id, $admin_id);
+    $stmt->execute();
+    $stmt->close();
+    header("Location: admin_dashboard.php");
+    exit();
+}
 
 // Handle Create Driver form submission
 if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['create_driver'])) {
@@ -25,6 +37,12 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['create_driver'])) {
         $notif_stmt->bind_param("i", $driver_id);
         $notif_stmt->execute();
         $notif_stmt->close();
+        
+        // Notify admin
+        $admin_notif = $conn->prepare("INSERT INTO notifications (admin_id, title, message, type) VALUES (?, 'New Driver Added', 'Driver $name has been successfully added to the system.', 'success')");
+        $admin_notif->bind_param("i", $admin_id);
+        $admin_notif->execute();
+        $admin_notif->close();
     } else {
         $error_message = "Error creating driver.";
     }
@@ -58,6 +76,12 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['assign_driver'])) {
             $driver_notif->bind_param("i", $driver_id);
             $driver_notif->execute();
             $driver_notif->close();
+            
+            // Notify admin
+            $admin_notif = $conn->prepare("INSERT INTO notifications (admin_id, title, message, type) VALUES (?, 'Driver Assigned', 'Driver {$pickup_data['driver_name']} assigned to pickup from {$pickup_data['user_name']}.', 'info')");
+            $admin_notif->bind_param("i", $admin_id);
+            $admin_notif->execute();
+            $admin_notif->close();
         }
         $stmt->close();
     }
@@ -70,6 +94,12 @@ if (isset($_GET['delete_user'])) {
     $stmt->bind_param("i", $user_id);
     if ($stmt->execute()) {
         $success_message = "User deleted successfully!";
+        
+        // Notify admin
+        $admin_notif = $conn->prepare("INSERT INTO notifications (admin_id, title, message, type) VALUES (?, 'User Deleted', 'A user account has been deleted from the system.', 'warning')");
+        $admin_notif->bind_param("i", $admin_id);
+        $admin_notif->execute();
+        $admin_notif->close();
     }
     $stmt->close();
     header("Location: admin_dashboard.php");
@@ -89,11 +119,32 @@ if (isset($_GET['fire_driver'])) {
         $notif_stmt->bind_param("i", $driver_id);
         $notif_stmt->execute();
         $notif_stmt->close();
+        
+        // Notify admin
+        $admin_notif = $conn->prepare("INSERT INTO notifications (admin_id, title, message, type) VALUES (?, 'Driver Removed', 'A driver has been removed from the system.', 'warning')");
+        $admin_notif->bind_param("i", $admin_id);
+        $admin_notif->execute();
+        $admin_notif->close();
     }
     $stmt->close();
     header("Location: admin_dashboard.php");
     exit();
 }
+
+// Fetch notifications
+$notif_sql = "SELECT * FROM notifications WHERE admin_id = ? ORDER BY created_at DESC LIMIT 10";
+$stmt_notif = $conn->prepare($notif_sql);
+$stmt_notif->bind_param("i", $admin_id);
+$stmt_notif->execute();
+$notifications = $stmt_notif->get_result();
+
+// Count unread notifications
+$unread_sql = "SELECT COUNT(*) as count FROM notifications WHERE admin_id = ? AND is_read = FALSE";
+$stmt_unread = $conn->prepare($unread_sql);
+$stmt_unread->bind_param("i", $admin_id);
+$stmt_unread->execute();
+$unread_count = $stmt_unread->get_result()->fetch_assoc()['count'];
+$stmt_unread->close();
 
 // Get today's date
 $today = date('Y-m-d');
@@ -212,6 +263,81 @@ $all_drivers_result = $conn->query($all_drivers_sql);
         .tab-content.active {
             display: block;
         }
+        .notification-bell {
+            position: relative;
+            cursor: pointer;
+            padding: 0.5rem;
+        }
+        .notification-badge {
+            position: absolute;
+            top: 0;
+            right: 0;
+            background: linear-gradient(135deg, #ef4444, #dc2626);
+            color: white;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.7rem;
+            font-weight: 700;
+        }
+        .notification-dropdown {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            margin-top: 0.5rem;
+            width: 380px;
+            max-height: 500px;
+            overflow-y: auto;
+            background: var(--bg-secondary);
+            border: 2px solid var(--border-color);
+            border-radius: 16px;
+            box-shadow: 0 10px 40px var(--shadow-color);
+            display: none;
+            z-index: 1000;
+        }
+        .notification-dropdown.show {
+            display: block;
+        }
+        .notification-header {
+            padding: 1rem 1.25rem;
+            border-bottom: 1px solid var(--border-color);
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+        .notification-item {
+            padding: 1rem 1.25rem;
+            border-bottom: 1px solid var(--border-color);
+            cursor: pointer;
+            transition: background 0.2s ease;
+        }
+        .notification-item:hover {
+            background: var(--bg-tertiary);
+        }
+        .notification-item.unread {
+            background: rgba(14, 165, 233, 0.05);
+        }
+        .notification-title {
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 0.25rem;
+        }
+        .notification-message {
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.5rem;
+        }
+        .notification-time {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+        }
+        .notification-empty {
+            padding: 2rem;
+            text-align: center;
+            color: var(--text-secondary);
+        }
     </style>
 </head>
 <body>
@@ -221,6 +347,32 @@ $all_drivers_result = $conn->query($all_drivers_sql);
                 <a href="admin_dashboard.php" class="logo">EcoWaste Admin</a>
                 <button id="theme-toggle" class="theme-toggle" aria-label="Toggle theme"></button>
                 <ul class="nav-links">
+                    <li style="position: relative;">
+                        <div class="notification-bell" onclick="toggleNotifications()">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+                                <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+                            </svg>
+                            <?php if ($unread_count > 0): ?>
+                            <span class="notification-badge"><?= $unread_count ?></span>
+                            <?php endif; ?>
+                        </div>
+                        <div class="notification-dropdown" id="notificationDropdown">
+                            <div class="notification-header">Notifications</div>
+                            <?php if ($notifications->num_rows > 0): ?>
+                                <?php while($notif = $notifications->fetch_assoc()): ?>
+                                <div class="notification-item <?= !$notif['is_read'] ? 'unread' : '' ?>" 
+                                     onclick="markAsRead(<?= $notif['id'] ?>)">
+                                    <div class="notification-title"><?= htmlspecialchars($notif['title']) ?></div>
+                                    <div class="notification-message"><?= htmlspecialchars($notif['message']) ?></div>
+                                    <div class="notification-time"><?= date('M j, Y g:i A', strtotime($notif['created_at'])) ?></div>
+                                </div>
+                                <?php endwhile; ?>
+                            <?php else: ?>
+                                <div class="notification-empty">No notifications</div>
+                            <?php endif; ?>
+                        </div>
+                    </li>
                     <li><a href="logout.php" class="btn btn-secondary">Logout</a></li>
                 </ul>
             </div>

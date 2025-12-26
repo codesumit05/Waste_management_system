@@ -8,6 +8,8 @@ if (!isset($_SESSION["admin_id"])) {
     exit();
 }
 
+$admin_id = $_SESSION["admin_id"];
+
 if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['pickup_id']) && isset($_POST['new_status'])) {
     $pickup_id = intval($_POST['pickup_id']);
     $new_status = $_POST['new_status'];
@@ -46,6 +48,14 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['pickup_id']) && isset(
                 $driver_notif->execute();
                 $driver_notif->close();
             }
+            
+            // Notify admin
+            $admin_notif_message = "Pickup from {$pickup_data['area']} has been successfully marked as completed.";
+            $admin_notif = $conn->prepare("INSERT INTO notifications (admin_id, title, message, type) VALUES (?, 'Status Updated', ?, 'success')");
+            $admin_notif->bind_param("is", $admin_id, $admin_notif_message);
+            $admin_notif->execute();
+            $admin_notif->close();
+            
         } elseif ($new_status == 'Cancelled') {
             // Notify user
             $notif_title = "Pickup Cancelled";
@@ -63,6 +73,13 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['pickup_id']) && isset(
                 $driver_notif->execute();
                 $driver_notif->close();
             }
+            
+            // Notify admin
+            $admin_notif_message = "Pickup from {$pickup_data['area']} has been cancelled.";
+            $admin_notif = $conn->prepare("INSERT INTO notifications (admin_id, title, message, type) VALUES (?, 'Status Updated', ?, 'warning')");
+            $admin_notif->bind_param("is", $admin_id, $admin_notif_message);
+            $admin_notif->execute();
+            $admin_notif->close();
         }
     }
 }

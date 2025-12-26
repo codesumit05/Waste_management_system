@@ -1,46 +1,108 @@
 <?php
 require 'db.php';
 
+// Ensure driver is logged in
 if (!isset($_SESSION["driver_id"])) {
     header("Location: driver_login.php");
     exit();
 }
+
 $driver_id = $_SESSION['driver_id'];
 $message = '';
 $message_type = '';
 
-// Handle status update to "Collected"
+// Mark notification as read
+if (isset($_GET['mark_read']) && isset($_GET['notif_id'])) {
+    $notif_id = intval($_GET['notif_id']);
+    $stmt = $conn->prepare("UPDATE notifications SET is_read = TRUE WHERE id = ? AND driver_id = ?");
+    $stmt->bind_param("ii", $notif_id, $driver_id);
+    $stmt->execute();
+    $stmt->close();
+    header("Location: driver_dashboard.php");
+    exit();
+}
+
+/**
+ * PURE SERVER-SIDE LOGIC
+ * This handles the "Mark as Collected" action.
+ */
 if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['collect_pickup'])) {
-    $pickup_id = $_POST['pickup_id'];
+    $pickup_id = intval($_POST['pickup_id']);
+    
+    // Get pickup details for notifications
+    $details_stmt = $conn->prepare("SELECT p.*, u.name as user_name, u.id as user_id FROM pickups p JOIN users u ON p.user_id = u.id WHERE p.id = ? AND p.driver_id = ?");
+    $details_stmt->bind_param("ii", $pickup_id, $driver_id);
+    $details_stmt->execute();
+    $pickup_data = $details_stmt->get_result()->fetch_assoc();
+    $details_stmt->close();
+    
+    // Update the database status directly
     $stmt = $conn->prepare("UPDATE pickups SET status = 'Collected by Driver' WHERE id = ? AND driver_id = ?");
     $stmt->bind_param("ii", $pickup_id, $driver_id);
-    if ($stmt->execute()) {
-        $message = "Pickup marked as collected!";
+    
+    if ($stmt->execute() && $pickup_data) {
+        $message = "Pickup successfully marked as collected!";
         $message_type = "success";
+        
+        // Notify the user about the collection
+        $user_notif_message = "Your waste from {$pickup_data['area']} has been collected by the driver.";
+        $user_notif = $conn->prepare("INSERT INTO notifications (user_id, title, message, type) VALUES (?, 'Waste Collected', ?, 'success')");
+        $user_notif->bind_param("is", $pickup_data['user_id'], $user_notif_message);
+        $user_notif->execute();
+        $user_notif->close();
+        
+        // Notify driver about successful collection
+        $driver_notif_message = "You have successfully collected waste from {$pickup_data['user_name']} at {$pickup_data['area']}.";
+        $driver_notif = $conn->prepare("INSERT INTO notifications (driver_id, title, message, type) VALUES (?, 'Collection Confirmed', ?, 'success')");
+        $driver_notif->bind_param("is", $driver_id, $driver_notif_message);
+        $driver_notif->execute();
+        $driver_notif->close();
+        
+        // Notify admin
+        $admin_notif_message = "Pickup from {$pickup_data['user_name']} at {$pickup_data['area']} has been collected.";
+        $admin_notif = $conn->prepare("INSERT INTO notifications (admin_id, title, message, type) SELECT id, 'Pickup Collected', ?, 'info' FROM users WHERE is_admin = TRUE LIMIT 1");
+        $admin_notif->bind_param("s", $admin_notif_message);
+        $admin_notif->execute();
+        $admin_notif->close();
     } else {
-        $message = "Error updating pickup status.";
+        $message = "Error: Database update failed.";
         $message_type = "error";
     }
     $stmt->close();
 }
 
-// Fetch CURRENTLY ASSIGNED pickups with location
+// Fetch notifications
+$notif_sql = "SELECT * FROM notifications WHERE driver_id = ? ORDER BY created_at DESC LIMIT 10";
+$stmt_notif = $conn->prepare($notif_sql);
+$stmt_notif->bind_param("i", $driver_id);
+$stmt_notif->execute();
+$notifications = $stmt_notif->get_result();
+
+// Count unread notifications
+$unread_sql = "SELECT COUNT(*) as count FROM notifications WHERE driver_id = ? AND is_read = FALSE";
+$stmt_unread = $conn->prepare($unread_sql);
+$stmt_unread->bind_param("i", $driver_id);
+$stmt_unread->execute();
+$unread_count = $stmt_unread->get_result()->fetch_assoc()['count'];
+$stmt_unread->close();
+
+// Get assigned pickups with coordinates and user email
 $assigned_sql = "SELECT p.*, u.name as user_name, u.email as user_email
-                FROM pickups p
-                JOIN users u ON p.user_id = u.id
-                WHERE p.driver_id = ? AND p.status = 'Assigned'
+                FROM pickups p 
+                JOIN users u ON p.user_id = u.id 
+                WHERE p.driver_id = ? AND p.status = 'Assigned' 
                 ORDER BY p.pickup_date ASC";
 $stmt_assigned = $conn->prepare($assigned_sql);
 $stmt_assigned->bind_param("i", $driver_id);
 $stmt_assigned->execute();
 $assigned_result = $stmt_assigned->get_result();
 
-// Fetch PAST pickups (History)
-$history_sql = "SELECT p.*, u.name as user_name
-                FROM pickups p
-                JOIN users u ON p.user_id = u.id
-                WHERE p.driver_id = ? AND p.status IN ('Completed', 'Cancelled')
-                ORDER BY p.updated_at DESC";
+// Get history
+$history_sql = "SELECT p.*, u.name as user_name 
+                FROM pickups p 
+                JOIN users u ON p.user_id = u.id 
+                WHERE p.driver_id = ? AND p.status IN ('Completed', 'Cancelled', 'Collected by Driver') 
+                ORDER BY p.updated_at DESC LIMIT 10";
 $stmt_history = $conn->prepare($history_sql);
 $stmt_history->bind_param("i", $driver_id);
 $stmt_history->execute();
@@ -56,8 +118,6 @@ $history_result = $stmt_history->get_result();
     <link rel="stylesheet" href="dashboard-style.css">
     <link rel="stylesheet" href="admin-style.css">
     <link rel="stylesheet" href="theme.css">
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <style>
         .location-badge {
             display: inline-flex;
@@ -87,8 +147,98 @@ $history_result = $stmt_history->get_result();
             color: var(--primary);
             text-decoration: none;
         }
-        .contact-info a:hover {
-            text-decoration: underline;
+        .directions-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 1rem;
+            background: linear-gradient(135deg, #10b981, #059669);
+            border: none;
+            border-radius: 8px;
+            color: white;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-top: 0.5rem;
+        }
+        .directions-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(16, 185, 129, 0.4);
+        }
+        .notification-bell {
+            position: relative;
+            cursor: pointer;
+            padding: 0.5rem;
+        }
+        .notification-badge {
+            position: absolute;
+            top: 0;
+            right: 0;
+            background: linear-gradient(135deg, #ef4444, #dc2626);
+            color: white;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.7rem;
+            font-weight: 700;
+        }
+        .notification-dropdown {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            margin-top: 0.5rem;
+            width: 380px;
+            max-height: 500px;
+            overflow-y: auto;
+            background: var(--bg-secondary);
+            border: 2px solid var(--border-color);
+            border-radius: 16px;
+            box-shadow: 0 10px 40px var(--shadow-color);
+            display: none;
+            z-index: 1000;
+        }
+        .notification-dropdown.show {
+            display: block;
+        }
+        .notification-header {
+            padding: 1rem 1.25rem;
+            border-bottom: 1px solid var(--border-color);
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+        .notification-item {
+            padding: 1rem 1.25rem;
+            border-bottom: 1px solid var(--border-color);
+            cursor: pointer;
+            transition: background 0.2s ease;
+        }
+        .notification-item:hover {
+            background: var(--bg-tertiary);
+        }
+        .notification-item.unread {
+            background: rgba(14, 165, 233, 0.05);
+        }
+        .notification-title {
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 0.25rem;
+        }
+        .notification-message {
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.5rem;
+        }
+        .notification-time {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+        }
+        .notification-empty {
+            padding: 2rem;
+            text-align: center;
+            color: var(--text-secondary);
         }
     </style>
 </head>
@@ -99,6 +249,32 @@ $history_result = $stmt_history->get_result();
                 <a href="#" class="logo">Driver Panel</a>
                 <button id="theme-toggle" class="theme-toggle" aria-label="Toggle theme"></button>
                 <ul class="nav-links">
+                    <li style="position: relative;">
+                        <div class="notification-bell" onclick="toggleNotifications()">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+                                <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+                            </svg>
+                            <?php if ($unread_count > 0): ?>
+                            <span class="notification-badge"><?= $unread_count ?></span>
+                            <?php endif; ?>
+                        </div>
+                        <div class="notification-dropdown" id="notificationDropdown">
+                            <div class="notification-header">Notifications</div>
+                            <?php if ($notifications->num_rows > 0): ?>
+                                <?php while($notif = $notifications->fetch_assoc()): ?>
+                                <div class="notification-item <?= !$notif['is_read'] ? 'unread' : '' ?>" 
+                                     onclick="markAsRead(<?= $notif['id'] ?>)">
+                                    <div class="notification-title"><?= htmlspecialchars($notif['title']) ?></div>
+                                    <div class="notification-message"><?= htmlspecialchars($notif['message']) ?></div>
+                                    <div class="notification-time"><?= date('M j, Y g:i A', strtotime($notif['created_at'])) ?></div>
+                                </div>
+                                <?php endwhile; ?>
+                            <?php else: ?>
+                                <div class="notification-empty">No notifications</div>
+                            <?php endif; ?>
+                        </div>
+                    </li>
                     <li><a href="logout.php" class="btn btn-secondary">Logout</a></li>
                 </ul>
             </div>
@@ -150,23 +326,27 @@ $history_result = $stmt_history->get_result();
                                             </svg>
                                             View on Map
                                         </button>
-                                        <br>
-                                        <small style="color: var(--text-secondary); margin-top: 0.5rem; display: block;">
-                                            📍 <?= number_format($row['latitude'], 4) ?>, <?= number_format($row['longitude'], 4) ?>
-                                        </small>
+                                        <button class="directions-btn" onclick="openGoogleMapsDirections(<?= $row['latitude'] ?>, <?= $row['longitude'] ?>)">
+                                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+                                                <path d="M2 17l10 5 10-5"/>
+                                                <path d="M2 12l10 5 10-5"/>
+                                            </svg>
+                                            Get Directions
+                                        </button>
                                     <?php else: ?>
                                         <span style="color: var(--text-secondary);">No location pinned</span>
                                     <?php endif; ?>
                                 </td>
                                 <td data-label="Action">
-                                    <form method="POST" action="driver_dashboard.php" onsubmit="return confirmCollect(event, this)">
+                                    <form method="POST" action="driver_dashboard.php" onsubmit="return handleCollect(event, this);">
                                         <input type="hidden" name="pickup_id" value="<?= $row['id'] ?>">
-                                        <button type="submit" name="collect_pickup" class="btn-collect">Mark as Collected</button>
+                                        <button type="submit" name="collect_pickup" class="btn-collect" style="width: 100%;">Mark as Collected</button>
                                     </form>
                                 </td>
                             </tr>
                             <?php endwhile; else: ?>
-                                <tr><td colspan="5">No new pickups assigned to you.</td></tr>
+                                <tr><td colspan="5">No pending pickups assigned to you.</td></tr>
                             <?php endif; ?>
                         </tbody>
                     </table>
@@ -192,7 +372,7 @@ $history_result = $stmt_history->get_result();
                                 <td data-label="Location"><strong><?= htmlspecialchars($row['area']) ?></strong><br><small><?= htmlspecialchars($row['city']) ?></small></td>
                                 <td data-label="Pickup Date"><?= htmlspecialchars($row['pickup_date']) ?></td>
                                 <td data-label="Final Status">
-                                    <span class="status-badge status-<?= strtolower($row['status']) ?>">
+                                    <span class="status-badge status-<?= strtolower(str_replace(' ', '-', $row['status'])) ?>">
                                         <?= htmlspecialchars($row['status']) ?>
                                     </span>
                                 </td>
@@ -215,72 +395,79 @@ $history_result = $stmt_history->get_result();
                     <h3 style="margin: 0; color: var(--text-primary);" id="modalTitle">Pickup Location</h3>
                     <p style="margin: 0.5rem 0 0 0; color: var(--text-secondary); font-size: 0.9rem;" id="modalSubtitle"></p>
                 </div>
-                <button onclick="closeLocationModal()" style="background: var(--bg-tertiary); border: 2px solid var(--border-color); color: var(--text-primary); cursor: pointer; font-size: 1.5rem; width: 40px; height: 40px; border-radius: 12px; display: flex; align-items: center; justify-content: center; transition: all 0.3s ease;">
-                    &times;
-                </button>
+                <button onclick="closeLocationModal()" style="background: var(--bg-tertiary); border: 2px solid var(--border-color); color: var(--text-primary); cursor: pointer; font-size: 1.5rem; width: 40px; height: 40px; border-radius: 12px; display: flex; align-items: center; justify-content: center;">&times;</button>
             </div>
-            <div id="viewMap" style="height: 500px; border-radius: 16px; border: 2px solid var(--border-color);"></div>
-            <div style="margin-top: 1.5rem; padding: 1rem; background: var(--bg-tertiary); border-radius: 12px; display: flex; gap: 1rem; flex-wrap: wrap;">
-                <button onclick="openInGoogleMaps()" class="btn btn-primary" style="flex: 1; min-width: 200px;">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 0.5rem;">
-                        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
-                        <polyline points="15 3 21 3 21 9"/>
-                        <line x1="10" y1="14" x2="21" y2="3"/>
-                    </svg>
-                    Open in Google Maps
-                </button>
-                <button onclick="getDirections()" class="btn btn-secondary" style="flex: 1; min-width: 200px;">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 0.5rem;">
-                        <polyline points="9 18 15 12 9 6"/>
-                    </svg>
-                    Get Directions
-                </button>
-            </div>
+            <div id="viewMap" style="height: 450px; border-radius: 16px; border: 2px solid var(--border-color);"></div>
         </div>
     </div>
 
     <script src="theme.js"></script>
     <script>
+        window.gm_authFailure = function() {
+            console.error('Google Maps authentication failed');
+            if(window.showAlert) {
+                showAlert('Google Maps failed to load. Please check API key configuration.', 'error');
+            }
+        };
+    </script>
+    <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBGfAE5JUWf6gMj80B5SOmF_aJ9blsRFes&loading=async&callback=initGoogleMaps"></script>
+    
+    <script>
         let viewMapInstance;
-        let currentLat, currentLng;
+        let currentMarker;
 
-        function showLocationModal(lat, lng, userName, address) {
-            currentLat = lat;
-            currentLng = lng;
-            
-            const modal = document.getElementById('locationModal');
-            modal.style.display = 'flex';
-            
+        function initGoogleMaps() {
+            console.log('Google Maps initialized');
+        }
+
+        function toggleNotifications() {
+            const dropdown = document.getElementById('notificationDropdown');
+            dropdown.classList.toggle('show');
+        }
+
+        document.addEventListener('click', function(event) {
+            const bell = document.querySelector('.notification-bell');
+            const dropdown = document.getElementById('notificationDropdown');
+            if (bell && dropdown && !bell.contains(event.target) && !dropdown.contains(event.target)) {
+                dropdown.classList.remove('show');
+            }
+        });
+
+        function markAsRead(notifId) {
+            window.location.href = `driver_dashboard.php?mark_read=1&notif_id=${notifId}`;
+        }
+
+        async function showLocationModal(lat, lng, userName, address) {
+            document.getElementById('locationModal').style.display = 'flex';
             document.getElementById('modalTitle').textContent = `Pickup Location: ${userName}`;
             document.getElementById('modalSubtitle').textContent = `📍 ${address}`;
             
-            setTimeout(() => {
+            setTimeout(async () => {
+                const { Map } = await google.maps.importLibrary("maps");
+                const { AdvancedMarkerElement } = await google.maps.importLibrary("marker");
+                
                 if (!viewMapInstance) {
-                    viewMapInstance = L.map('viewMap').setView([lat, lng], 16);
-                    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                        attribution: '© OpenStreetMap contributors'
-                    }).addTo(viewMapInstance);
+                    viewMapInstance = new Map(document.getElementById('viewMap'), {
+                        center: { lat: lat, lng: lng },
+                        zoom: 16,
+                        mapTypeControl: true,
+                        streetViewControl: true,
+                        fullscreenControl: true,
+                        mapId: "DRIVER_VIEW_MAP"
+                    });
                 } else {
-                    viewMapInstance.setView([lat, lng], 16);
+                    viewMapInstance.setCenter({ lat: lat, lng: lng });
                 }
                 
-                // Custom marker icon
-                const customIcon = L.divIcon({
-                    className: 'custom-marker',
-                    html: `<div style="background: linear-gradient(135deg, #ef4444, #dc2626); width: 40px; height: 40px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); border: 3px solid white; box-shadow: 0 4px 12px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center;">
-                            <svg width="20" height="20" viewBox="0 0 24 24" fill="white" style="transform: rotate(45deg);">
-                                <path d="M19 9l-7 7-7-7"/>
-                            </svg>
-                           </div>`,
-                    iconSize: [40, 40],
-                    iconAnchor: [20, 40]
+                if (currentMarker) {
+                    currentMarker.map = null;
+                }
+
+                currentMarker = new AdvancedMarkerElement({
+                    map: viewMapInstance,
+                    position: { lat: lat, lng: lng },
+                    title: address
                 });
-                
-                L.marker([lat, lng], { icon: customIcon }).addTo(viewMapInstance)
-                    .bindPopup(`<strong>${userName}</strong><br>${address}`)
-                    .openPopup();
-                
-                viewMapInstance.invalidateSize();
             }, 100);
         }
 
@@ -288,38 +475,39 @@ $history_result = $stmt_history->get_result();
             document.getElementById('locationModal').style.display = 'none';
         }
 
-        function openInGoogleMaps() {
-            window.open(`https://www.google.com/maps?q=${currentLat},${currentLng}`, '_blank');
+        function openGoogleMapsDirections(lat, lng) {
+            const url = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`;
+            window.open(url, '_blank');
         }
 
-        function getDirections() {
-            if (navigator.geolocation) {
-                navigator.geolocation.getCurrentPosition(
-                    function(position) {
-                        const myLat = position.coords.latitude;
-                        const myLng = position.coords.longitude;
-                        window.open(`https://www.google.com/maps/dir/${myLat},${myLng}/${currentLat},${currentLng}`, '_blank');
-                    },
-                    function() {
-                        window.open(`https://www.google.com/maps/dir//${currentLat},${currentLng}`, '_blank');
-                    }
-                );
-            } else {
-                window.open(`https://www.google.com/maps/dir//${currentLat},${currentLng}`, '_blank');
-            }
-        }
-
-        <?php if (!empty($message)): ?>
-            showAlert('<?= addslashes($message) ?>', '<?= $message_type ?>');
-        <?php endif; ?>
-
-        function confirmCollect(event, form) {
+        function handleCollect(event, form) {
             event.preventDefault();
-            showConfirm('Confirm that you have collected this waste?', () => {
+            
+            showConfirm('Is the waste collected?', () => {
+                const hiddenInput = document.createElement('input');
+                hiddenInput.type = 'hidden';
+                hiddenInput.name = 'collect_pickup';
+                hiddenInput.value = '1';
+                form.appendChild(hiddenInput);
                 form.submit();
             });
+            
             return false;
         }
+
+        <?php if($message): ?>
+            if(window.showAlert) {
+                showAlert("<?= addslashes($message) ?>", "<?= $message_type ?>");
+            } else {
+                alert("<?= addslashes($message) ?>");
+            }
+        <?php endif; ?>
     </script>
 </body>
 </html>
+<?php 
+    $stmt_assigned->close();
+    $stmt_history->close();
+    $stmt_notif->close();
+    $conn->close(); 
+?>

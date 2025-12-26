@@ -89,8 +89,6 @@ $history_result = $stmt_history->get_result();
     <link rel="stylesheet" href="admin-style.css">
     <link rel="stylesheet" href="theme.css">
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <style>
         #map {
             height: 400px;
@@ -98,7 +96,6 @@ $history_result = $stmt_history->get_result();
             border-radius: 16px;
             border: 2px solid var(--border-color);
             margin-bottom: 1.5rem;
-            z-index: 1;
         }
         .search-container {
             position: relative;
@@ -117,18 +114,6 @@ $history_result = $stmt_history->get_result();
             outline: none;
             border-color: var(--primary);
             box-shadow: 0 0 20px rgba(14, 165, 233, 0.2);
-        }
-        .search-btn {
-            position: absolute;
-            right: 8px;
-            top: 50%;
-            transform: translateY(-50%);
-            background: linear-gradient(135deg, var(--primary), var(--secondary));
-            border: none;
-            padding: 0.625rem 1rem;
-            border-radius: 8px;
-            cursor: pointer;
-            color: white;
         }
         .location-info {
             background: var(--bg-tertiary);
@@ -391,13 +376,7 @@ $history_result = $stmt_history->get_result();
                 </div>
 
                 <div class="search-container">
-                    <input type="text" id="searchInput" class="search-input" placeholder="Search for a location (e.g., Bhopal Railway Station)">
-                    <button type="button" class="search-btn" onclick="searchLocation()">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <circle cx="11" cy="11" r="8"/>
-                            <path d="m21 21-4.35-4.35"/>
-                        </svg>
-                    </button>
+                    <input type="text" id="searchInput" class="search-input" placeholder="Search for a location (e.g., Bhopal Railway Station)" autocomplete="off">
                 </div>
 
                 <button type="button" class="btn-get-location" onclick="getCurrentLocation()">
@@ -471,10 +450,145 @@ $history_result = $stmt_history->get_result();
     </div>
 
     <script src="theme.js"></script>
+    <!-- Google Maps API -->
+    <script>
+        // Error handler for Google Maps
+        window.gm_authFailure = function() {
+            console.error('Google Maps authentication failed');
+            showAlert('Google Maps failed to load. Please check API key configuration.', 'error');
+            document.getElementById('map').innerHTML = '<div style="display: flex; align-items: center; justify-content: center; height: 100%; color: var(--text-secondary); flex-direction: column; gap: 1rem;"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg><p>Map loading failed. Please check your API configuration.</p></div>';
+        };
+    </script>
+    <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBGfAE5JUWf6gMj80B5SOmF_aJ9blsRFes&libraries=places&callback=initMap" async defer></script>
+    
     <script>
         let map;
         let marker;
         let viewMapInstance;
+        let autocomplete;
+        let geocoder;
+
+        function initMap() {
+            // Default location (Bhopal, India)
+            const defaultLocation = { lat: 23.2599, lng: 77.4126 };
+            
+            // Initialize main map
+            map = new google.maps.Map(document.getElementById('map'), {
+                center: defaultLocation,
+                zoom: 13,
+                mapTypeControl: true,
+                streetViewControl: false,
+                fullscreenControl: true,
+                styles: [
+                    {
+                        featureType: "poi",
+                        elementType: "labels",
+                        stylers: [{ visibility: "off" }]
+                    }
+                ]
+            });
+
+            // Initialize geocoder
+            geocoder = new google.maps.Geocoder();
+
+            // Initialize autocomplete for search
+            const searchInput = document.getElementById('searchInput');
+            autocomplete = new google.maps.places.Autocomplete(searchInput);
+            autocomplete.bindTo('bounds', map);
+
+            // Handle place selection
+            autocomplete.addListener('place_changed', function() {
+                const place = autocomplete.getPlace();
+                if (!place.geometry) {
+                    showAlert('Location not found. Please try a different search.', 'warning');
+                    return;
+                }
+
+                const location = {
+                    lat: place.geometry.location.lat(),
+                    lng: place.geometry.location.lng()
+                };
+
+                map.setCenter(location);
+                map.setZoom(15);
+                setMarker(location.lat, location.lng);
+                showAlert('Location found!', 'success');
+            });
+
+            // Click on map to set marker
+            map.addListener('click', function(event) {
+                setMarker(event.latLng.lat(), event.latLng.lng());
+            });
+        }
+
+        function setMarker(lat, lng) {
+            // Remove existing marker
+            if (marker) {
+                marker.setMap(null);
+            }
+            
+            // Create new marker
+            marker = new google.maps.Marker({
+                position: { lat: lat, lng: lng },
+                map: map,
+                animation: google.maps.Animation.DROP,
+                title: 'Pickup Location'
+            });
+
+            // Update form fields
+            document.getElementById('latitude').value = lat;
+            document.getElementById('longitude').value = lng;
+            document.getElementById('selectedLat').textContent = lat.toFixed(6);
+            document.getElementById('selectedLng').textContent = lng.toFixed(6);
+            document.getElementById('locationInfo').classList.add('show');
+        }
+
+        function getCurrentLocation() {
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(
+                    function(position) {
+                        const lat = position.coords.latitude;
+                        const lng = position.coords.longitude;
+                        map.setCenter({ lat: lat, lng: lng });
+                        map.setZoom(15);
+                        setMarker(lat, lng);
+                        showAlert('Location acquired successfully!', 'success');
+                    },
+                    function(error) {
+                        showAlert('Unable to get location. Please click on the map to set location.', 'warning');
+                    }
+                );
+            } else {
+                showAlert('Geolocation is not supported by your browser.', 'error');
+            }
+        }
+
+        function showLocationModal(lat, lng) {
+            const modal = document.getElementById('locationModal');
+            modal.style.display = 'flex';
+            
+            setTimeout(() => {
+                if (!viewMapInstance) {
+                    viewMapInstance = new google.maps.Map(document.getElementById('viewMap'), {
+                        center: { lat: lat, lng: lng },
+                        zoom: 15,
+                        mapTypeControl: true
+                    });
+                } else {
+                    viewMapInstance.setCenter({ lat: lat, lng: lng });
+                }
+                
+                new google.maps.Marker({
+                    position: { lat: lat, lng: lng },
+                    map: viewMapInstance,
+                    title: 'Pickup Location'
+                });
+            }, 100);
+        }
+
+        function closeLocationModal() {
+            document.getElementById('locationModal').style.display = 'none';
+        }
 
         function toggleNotifications() {
             const dropdown = document.getElementById('notificationDropdown');
@@ -492,111 +606,6 @@ $history_result = $stmt_history->get_result();
         function markAsRead(notifId) {
             window.location.href = `dashboard.php?mark_read=1&notif_id=${notifId}`;
         }
-
-        function initMap() {
-            map = L.map('map').setView([23.2599, 77.4126], 13);
-            
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                attribution: '© OpenStreetMap contributors'
-            }).addTo(map);
-
-            map.on('click', function(e) {
-                setMarker(e.latlng.lat, e.latlng.lng);
-            });
-        }
-
-        function setMarker(lat, lng) {
-            if (marker) {
-                map.removeLayer(marker);
-            }
-            
-            marker = L.marker([lat, lng]).addTo(map);
-            
-            document.getElementById('latitude').value = lat;
-            document.getElementById('longitude').value = lng;
-            document.getElementById('selectedLat').textContent = lat.toFixed(6);
-            document.getElementById('selectedLng').textContent = lng.toFixed(6);
-            document.getElementById('locationInfo').classList.add('show');
-        }
-
-        function getCurrentLocation() {
-            if (navigator.geolocation) {
-                navigator.geolocation.getCurrentPosition(
-                    function(position) {
-                        const lat = position.coords.latitude;
-                        const lng = position.coords.longitude;
-                        map.setView([lat, lng], 15);
-                        setMarker(lat, lng);
-                        showAlert('Location acquired successfully!', 'success');
-                    },
-                    function(error) {
-                        showAlert('Unable to get location. Please click on the map to set location.', 'warning');
-                    }
-                );
-            } else {
-                showAlert('Geolocation is not supported by your browser.', 'error');
-            }
-        }
-
-        async function searchLocation() {
-            const query = document.getElementById('searchInput').value;
-            if (!query) {
-                showAlert('Please enter a location to search', 'warning');
-                return;
-            }
-
-            try {
-                const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}`);
-                const data = await response.json();
-                
-                if (data && data.length > 0) {
-                    const lat = parseFloat(data[0].lat);
-                    const lng = parseFloat(data[0].lon);
-                    map.setView([lat, lng], 15);
-                    setMarker(lat, lng);
-                    showAlert('Location found!', 'success');
-                } else {
-                    showAlert('Location not found. Please try a different search.', 'warning');
-                }
-            } catch (error) {
-                showAlert('Error searching location. Please try again.', 'error');
-            }
-        }
-
-        document.getElementById('searchInput').addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                searchLocation();
-            }
-        });
-
-        function showLocationModal(lat, lng) {
-            const modal = document.getElementById('locationModal');
-            modal.style.display = 'flex';
-            
-            setTimeout(() => {
-                if (!viewMapInstance) {
-                    viewMapInstance = L.map('viewMap').setView([lat, lng], 15);
-                    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                        attribution: '© OpenStreetMap contributors'
-                    }).addTo(viewMapInstance);
-                } else {
-                    viewMapInstance.setView([lat, lng], 15);
-                }
-                
-                L.marker([lat, lng]).addTo(viewMapInstance)
-                    .bindPopup('Pickup Location')
-                    .openPopup();
-                
-                viewMapInstance.invalidateSize();
-            }, 100);
-        }
-
-        function closeLocationModal() {
-            document.getElementById('locationModal').style.display = 'none';
-        }
-
-        document.addEventListener('DOMContentLoaded', initMap);
 
         <?php if (!empty($message)): ?>
             showAlert('<?= addslashes($message) ?>', '<?= $message_type ?>');
