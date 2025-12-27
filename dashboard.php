@@ -26,6 +26,15 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['pickup_date'])) {
     if($stmt->execute()){
         $message = "Pickup scheduled successfully with location!";
         $message_type = "success";
+
+        // Notify Admin about new pickup request
+        $user_name = $_SESSION['user_name'];
+        $notif_title = "New Pickup Request";
+        $notif_message = "User $user_name has scheduled a new pickup in $area, $city for $pickup_date ($time_slot).";
+        $admin_notif = $conn->prepare("INSERT INTO notifications (admin_id, title, message, type) SELECT id, ?, ?, 'info' FROM users WHERE is_admin = TRUE LIMIT 1");
+        $admin_notif->bind_param("ss", $notif_title, $notif_message);
+        $admin_notif->execute();
+        $admin_notif->close();
     } else {
         $message = "Error scheduling pickup.";
         $message_type = "error";
@@ -44,8 +53,18 @@ if (isset($_GET['mark_read']) && isset($_GET['notif_id'])) {
     exit();
 }
 
-// Fetch notifications
-$notif_sql = "SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 10";
+// Mark all notifications as read
+if (isset($_GET['mark_all_read'])) {
+    $stmt = $conn->prepare("UPDATE notifications SET is_read = TRUE WHERE user_id = ?");
+    $stmt->bind_param("i", $user_id);
+    $stmt->execute();
+    $stmt->close();
+    header("Location: dashboard.php");
+    exit();
+}
+
+// Fetch recent 3 notifications
+$notif_sql = "SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 3";
 $stmt_notif = $conn->prepare($notif_sql);
 $stmt_notif->bind_param("i", $user_id);
 $stmt_notif->execute();
@@ -84,11 +103,13 @@ $history_result = $stmt_history->get_result();
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Dashboard - EcoWaste Solutions</title>
-    <link rel="stylesheet" href="style.css">
-    <link rel="stylesheet" href="dashboard-style.css">
-    <link rel="stylesheet" href="admin-style.css">
-    <link rel="stylesheet" href="theme.css">
+    <link rel="stylesheet" href="style.css?v=2">
+    <link rel="stylesheet" href="dashboard-style.css?v=2">
+    <link rel="stylesheet" href="admin-style.css?v=2">
+    <link rel="stylesheet" href="theme.css?v=2">
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css?v=2" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <style>
         #map {
             height: 400px;
@@ -96,6 +117,7 @@ $history_result = $stmt_history->get_result();
             border-radius: 16px;
             border: 2px solid var(--border-color);
             margin-bottom: 1.5rem;
+            z-index: 1;
         }
         .search-container {
             position: relative;
@@ -114,6 +136,18 @@ $history_result = $stmt_history->get_result();
             outline: none;
             border-color: var(--primary);
             box-shadow: 0 0 20px rgba(14, 165, 233, 0.2);
+        }
+        .search-btn {
+            position: absolute;
+            right: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            border: none;
+            padding: 0.625rem 1rem;
+            border-radius: 8px;
+            cursor: pointer;
+            color: white;
         }
         .location-info {
             background: var(--bg-tertiary);
@@ -188,23 +222,31 @@ $history_result = $stmt_history->get_result();
             right: 0;
             margin-top: 0.5rem;
             width: 380px;
-            max-height: 500px;
-            overflow-y: auto;
+            max-height: 450px;
             background: var(--bg-secondary);
             border: 2px solid var(--border-color);
             border-radius: 16px;
             box-shadow: 0 10px 40px var(--shadow-color);
             display: none;
             z-index: 1000;
+            overflow: hidden;
+            flex-direction: column;
         }
         .notification-dropdown.show {
-            display: block;
+            display: flex;
         }
         .notification-header {
             padding: 1rem 1.25rem;
             border-bottom: 1px solid var(--border-color);
             font-weight: 700;
             color: var(--text-primary);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .notification-body {
+            flex: 1;
+            overflow-y: auto;
         }
         .notification-item {
             padding: 1rem 1.25rem;
@@ -237,6 +279,96 @@ $history_result = $stmt_history->get_result();
             text-align: center;
             color: var(--text-secondary);
         }
+        .notification-footer {
+            padding: 0.75rem 1.25rem;
+            text-align: center;
+            border-top: 1px solid var(--border-color);
+        }
+        .view-all-btn {
+            color: var(--primary);
+            font-weight: 600;
+            cursor: pointer;
+            font-size: 0.875rem;
+        }
+        .view-all-btn:hover {
+            text-decoration: underline;
+        }
+        .mark-all-read-btn {
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            color: white;
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            font-size: 0.75rem;
+            transition: all 0.3s ease;
+        }
+        .mark-all-read-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(14, 165, 233, 0.4);
+        }
+        
+        /* All Notifications Modal */
+        .all-notifications-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.8);
+            z-index: 10000;
+            align-items: center;
+            justify-content: center;
+        }
+        .all-notifications-modal.show {
+            display: flex;
+        }
+        .modal-content {
+            background: var(--bg-secondary);
+            border-radius: 24px;
+            max-width: 700px;
+            width: 90%;
+            max-height: 85vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 25px 60px var(--shadow-color);
+        }
+        .modal-header {
+            padding: 1.5rem;
+            border-bottom: 2px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .modal-header h2 {
+            margin: 0;
+            font-size: 1.5rem;
+        }
+        .modal-body {
+            padding: 1rem;
+            overflow-y: auto;
+            flex: 1;
+        }
+        .modal-close {
+            background: var(--bg-tertiary);
+            border: 2px solid var(--border-color);
+            color: var(--text-primary);
+            cursor: pointer;
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            font-size: 1.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s ease;
+        }
+        .modal-close:hover {
+            border-color: var(--primary);
+            color: var(--primary);
+        }
     </style>
 </head>
 <body>
@@ -257,18 +389,28 @@ $history_result = $stmt_history->get_result();
                             <?php endif; ?>
                         </div>
                         <div class="notification-dropdown" id="notificationDropdown">
-                            <div class="notification-header">Notifications</div>
+                            <div class="notification-header">
+                                Notifications
+                                <button class="mark-all-read-btn" onclick="markAllRead()">Mark All</button>
+                            </div>
+                            <div class="notification-body">
+                                <?php if ($notifications->num_rows > 0): ?>
+                                    <?php while($notif = $notifications->fetch_assoc()): ?>
+                                    <div class="notification-item <?= !$notif['is_read'] ? 'unread' : '' ?>" 
+                                         onclick="markAsRead(<?= $notif['id'] ?>)">
+                                        <div class="notification-title"><?= htmlspecialchars($notif['title']) ?></div>
+                                        <div class="notification-message"><?= htmlspecialchars($notif['message']) ?></div>
+                                        <div class="notification-time"><?= date('M j, Y g:i A', strtotime($notif['created_at'])) ?></div>
+                                    </div>
+                                    <?php endwhile; ?>
+                                <?php else: ?>
+                                    <div class="notification-empty">No notifications</div>
+                                <?php endif; ?>
+                            </div>
                             <?php if ($notifications->num_rows > 0): ?>
-                                <?php while($notif = $notifications->fetch_assoc()): ?>
-                                <div class="notification-item <?= !$notif['is_read'] ? 'unread' : '' ?>" 
-                                     onclick="markAsRead(<?= $notif['id'] ?>)">
-                                    <div class="notification-title"><?= htmlspecialchars($notif['title']) ?></div>
-                                    <div class="notification-message"><?= htmlspecialchars($notif['message']) ?></div>
-                                    <div class="notification-time"><?= date('M j, Y g:i A', strtotime($notif['created_at'])) ?></div>
-                                </div>
-                                <?php endwhile; ?>
-                            <?php else: ?>
-                                <div class="notification-empty">No notifications</div>
+                            <div class="notification-footer">
+                                <div class="view-all-btn" onclick="showAllNotifications()">View All Notifications</div>
+                            </div>
                             <?php endif; ?>
                         </div>
                     </li>
@@ -277,6 +419,19 @@ $history_result = $stmt_history->get_result();
             </div>
         </nav>
     </header>
+
+    <!-- All Notifications Modal -->
+    <div class="all-notifications-modal" id="allNotificationsModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>All Notifications</h2>
+                <button class="modal-close" onclick="closeAllNotifications()">&times;</button>
+            </div>
+            <div class="modal-body" id="allNotificationsBody">
+                <!-- Will be populated by JavaScript -->
+            </div>
+        </div>
+    </div>
 
     <main class="dashboard-main">
         <div class="container">
@@ -377,6 +532,12 @@ $history_result = $stmt_history->get_result();
 
                 <div class="search-container">
                     <input type="text" id="searchInput" class="search-input" placeholder="Search for a location (e.g., Bhopal Railway Station)" autocomplete="off">
+                    <button type="button" class="search-btn" onclick="searchLocation()">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="11" cy="11" r="8"/>
+                            <path d="m21 21-4.35-4.35"/>
+                        </svg>
+                    </button>
                 </div>
 
                 <button type="button" class="btn-get-location" onclick="getCurrentLocation()">
@@ -450,92 +611,100 @@ $history_result = $stmt_history->get_result();
     </div>
 
     <script src="theme.js"></script>
-    <!-- Google Maps API -->
-    <script>
-        // Error handler for Google Maps
-        window.gm_authFailure = function() {
-            console.error('Google Maps authentication failed');
-            showAlert('Google Maps failed to load. Please check API key configuration.', 'error');
-            document.getElementById('map').innerHTML = '<div style="display: flex; align-items: center; justify-content: center; height: 100%; color: var(--text-secondary); flex-direction: column; gap: 1rem;"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg><p>Map loading failed. Please check your API configuration.</p></div>';
-        };
-    </script>
-    <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBGfAE5JUWf6gMj80B5SOmF_aJ9blsRFes&libraries=places&callback=initMap" async defer></script>
-    
     <script>
         let map;
         let marker;
         let viewMapInstance;
-        let autocomplete;
-        let geocoder;
 
-        function initMap() {
-            // Default location (Bhopal, India)
-            const defaultLocation = { lat: 23.2599, lng: 77.4126 };
-            
-            // Initialize main map
-            map = new google.maps.Map(document.getElementById('map'), {
-                center: defaultLocation,
-                zoom: 13,
-                mapTypeControl: true,
-                streetViewControl: false,
-                fullscreenControl: true,
-                styles: [
-                    {
-                        featureType: "poi",
-                        elementType: "labels",
-                        stylers: [{ visibility: "off" }]
+        // Notification Functions
+        function toggleNotifications() {
+            const dropdown = document.getElementById('notificationDropdown');
+            dropdown.classList.toggle('show');
+        }
+
+        function markAsRead(notifId) {
+            window.location.href = `dashboard.php?mark_read=1&notif_id=${notifId}`;
+        }
+
+        function markAllRead() {
+            if (confirm('Mark all notifications as read?')) {
+                window.location.href = 'dashboard.php?mark_all_read=1';
+            }
+        }
+
+        function showAllNotifications() {
+            document.getElementById('allNotificationsModal').classList.add('show');
+            document.getElementById('notificationDropdown').classList.remove('show');
+            fetchAllNotifications();
+        }
+
+        function closeAllNotifications() {
+            document.getElementById('allNotificationsModal').classList.remove('show');
+        }
+
+        function fetchAllNotifications() {
+            fetch('get_all_notifications.php')
+                .then(response => response.json())
+                .then(data => {
+                    const body = document.getElementById('allNotificationsBody');
+                    if (data.error) {
+                        body.innerHTML = '<div class="notification-empty">Error loading notifications</div>';
+                        return;
                     }
-                ]
-            });
+                    if (data.length === 0) {
+                        body.innerHTML = '<div class="notification-empty">No notifications</div>';
+                        return;
+                    }
+                    body.innerHTML = data.map(notif => `
+                        <div class="notification-item ${!notif.is_read ? 'unread' : ''}" onclick="markAsRead(${notif.id})">
+                            <div class="notification-title">${notif.title}</div>
+                            <div class="notification-message">${notif.message}</div>
+                            <div class="notification-time">${notif.created_at}</div>
+                        </div>
+                    `).join('');
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    document.getElementById('allNotificationsBody').innerHTML = '<div class="notification-empty">Error loading notifications</div>';
+                });
+        }
 
-            // Initialize geocoder
-            geocoder = new google.maps.Geocoder();
+        // Close notification dropdown when clicking outside
+        document.addEventListener('click', function(event) {
+            const bell = document.querySelector('.notification-bell');
+            const dropdown = document.getElementById('notificationDropdown');
+            if (bell && dropdown && !bell.contains(event.target) && !dropdown.contains(event.target)) {
+                dropdown.classList.remove('show');
+            }
+        });
 
-            // Initialize autocomplete for search
-            const searchInput = document.getElementById('searchInput');
-            autocomplete = new google.maps.places.Autocomplete(searchInput);
-            autocomplete.bindTo('bounds', map);
+        // Close modal when clicking outside
+        document.getElementById('allNotificationsModal')?.addEventListener('click', function(event) {
+            if (event.target === this) {
+                closeAllNotifications();
+            }
+        });
 
-            // Handle place selection
-            autocomplete.addListener('place_changed', function() {
-                const place = autocomplete.getPlace();
-                if (!place.geometry) {
-                    showAlert('Location not found. Please try a different search.', 'warning');
-                    return;
-                }
+        // Map Functions - Leaflet
+        function initMap() {
+            map = L.map('map').setView([23.2599, 77.4126], 13);
+            
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors'
+            }).addTo(map);
 
-                const location = {
-                    lat: place.geometry.location.lat(),
-                    lng: place.geometry.location.lng()
-                };
-
-                map.setCenter(location);
-                map.setZoom(15);
-                setMarker(location.lat, location.lng);
-                showAlert('Location found!', 'success');
-            });
-
-            // Click on map to set marker
-            map.addListener('click', function(event) {
-                setMarker(event.latLng.lat(), event.latLng.lng());
+            map.on('click', function(e) {
+                setMarker(e.latlng.lat, e.latlng.lng);
             });
         }
 
         function setMarker(lat, lng) {
-            // Remove existing marker
             if (marker) {
-                marker.setMap(null);
+                map.removeLayer(marker);
             }
             
-            // Create new marker
-            marker = new google.maps.Marker({
-                position: { lat: lat, lng: lng },
-                map: map,
-                animation: google.maps.Animation.DROP,
-                title: 'Pickup Location'
-            });
-
-            // Update form fields
+            marker = L.marker([lat, lng]).addTo(map);
+            
             document.getElementById('latitude').value = lat;
             document.getElementById('longitude').value = lng;
             document.getElementById('selectedLat').textContent = lat.toFixed(6);
@@ -549,8 +718,7 @@ $history_result = $stmt_history->get_result();
                     function(position) {
                         const lat = position.coords.latitude;
                         const lng = position.coords.longitude;
-                        map.setCenter({ lat: lat, lng: lng });
-                        map.setZoom(15);
+                        map.setView([lat, lng], 15);
                         setMarker(lat, lng);
                         showAlert('Location acquired successfully!', 'success');
                     },
@@ -563,26 +731,63 @@ $history_result = $stmt_history->get_result();
             }
         }
 
+        async function searchLocation() {
+    const query = document.getElementById('searchInput').value;
+    if (!query) {
+        showAlert('Please enter a location to search', 'warning');
+        return;
+    }
+
+    try {
+        const response = await fetch(`search_location.php?q=${encodeURIComponent(query)}`);
+        const data = await response.json();
+        
+        if (data.error) {
+            showAlert(data.error, 'error');
+            return;
+        }
+        
+        if (data && data.length > 0) {
+            const lat = parseFloat(data[0].lat);
+            const lng = parseFloat(data[0].lon);
+            map.setView([lat, lng], 15);
+            setMarker(lat, lng);
+            showAlert('Location found!', 'success');
+        } else {
+            showAlert('Location not found. Please try a different search.', 'warning');
+        }
+    } catch (error) {
+        console.error('Search error:', error);
+        showAlert('Error searching location. Please try again.', 'error');
+    }
+}
+
+        document.getElementById('searchInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                searchLocation();
+            }
+        });
+
         function showLocationModal(lat, lng) {
             const modal = document.getElementById('locationModal');
             modal.style.display = 'flex';
             
             setTimeout(() => {
                 if (!viewMapInstance) {
-                    viewMapInstance = new google.maps.Map(document.getElementById('viewMap'), {
-                        center: { lat: lat, lng: lng },
-                        zoom: 15,
-                        mapTypeControl: true
-                    });
+                    viewMapInstance = L.map('viewMap').setView([lat, lng], 15);
+                    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                        attribution: '© OpenStreetMap contributors'
+                    }).addTo(viewMapInstance);
                 } else {
-                    viewMapInstance.setCenter({ lat: lat, lng: lng });
+                    viewMapInstance.setView([lat, lng], 15);
                 }
                 
-                new google.maps.Marker({
-                    position: { lat: lat, lng: lng },
-                    map: viewMapInstance,
-                    title: 'Pickup Location'
-                });
+                L.marker([lat, lng]).addTo(viewMapInstance)
+                    .bindPopup('Pickup Location')
+                    .openPopup();
+                
+                viewMapInstance.invalidateSize();
             }, 100);
         }
 
@@ -590,23 +795,10 @@ $history_result = $stmt_history->get_result();
             document.getElementById('locationModal').style.display = 'none';
         }
 
-        function toggleNotifications() {
-            const dropdown = document.getElementById('notificationDropdown');
-            dropdown.classList.toggle('show');
-        }
+        // Initialize map when DOM is ready
+        document.addEventListener('DOMContentLoaded', initMap);
 
-        document.addEventListener('click', function(event) {
-            const bell = document.querySelector('.notification-bell');
-            const dropdown = document.getElementById('notificationDropdown');
-            if (bell && dropdown && !bell.contains(event.target) && !dropdown.contains(event.target)) {
-                dropdown.classList.remove('show');
-            }
-        });
-
-        function markAsRead(notifId) {
-            window.location.href = `dashboard.php?mark_read=1&notif_id=${notifId}`;
-        }
-
+        // Show PHP messages
         <?php if (!empty($message)): ?>
             showAlert('<?= addslashes($message) ?>', '<?= $message_type ?>');
         <?php endif; ?>

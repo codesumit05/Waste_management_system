@@ -1,7 +1,6 @@
 <?php
 require 'db.php';
 
-// Ensure driver is logged in
 if (!isset($_SESSION["driver_id"])) {
     header("Location: driver_login.php");
     exit();
@@ -22,21 +21,25 @@ if (isset($_GET['mark_read']) && isset($_GET['notif_id'])) {
     exit();
 }
 
-/**
- * PURE SERVER-SIDE LOGIC
- * This handles the "Mark as Collected" action.
- */
+// Mark all notifications as read
+if (isset($_GET['mark_all_read'])) {
+    $stmt = $conn->prepare("UPDATE notifications SET is_read = TRUE WHERE driver_id = ?");
+    $stmt->bind_param("i", $driver_id);
+    $stmt->execute();
+    $stmt->close();
+    header("Location: driver_dashboard.php");
+    exit();
+}
+
 if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['collect_pickup'])) {
     $pickup_id = intval($_POST['pickup_id']);
     
-    // Get pickup details for notifications
     $details_stmt = $conn->prepare("SELECT p.*, u.name as user_name, u.id as user_id FROM pickups p JOIN users u ON p.user_id = u.id WHERE p.id = ? AND p.driver_id = ?");
     $details_stmt->bind_param("ii", $pickup_id, $driver_id);
     $details_stmt->execute();
     $pickup_data = $details_stmt->get_result()->fetch_assoc();
     $details_stmt->close();
     
-    // Update the database status directly
     $stmt = $conn->prepare("UPDATE pickups SET status = 'Collected by Driver' WHERE id = ? AND driver_id = ?");
     $stmt->bind_param("ii", $pickup_id, $driver_id);
     
@@ -44,21 +47,18 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['collect_pickup'])) {
         $message = "Pickup successfully marked as collected!";
         $message_type = "success";
         
-        // Notify the user about the collection
         $user_notif_message = "Your waste from {$pickup_data['area']} has been collected by the driver.";
         $user_notif = $conn->prepare("INSERT INTO notifications (user_id, title, message, type) VALUES (?, 'Waste Collected', ?, 'success')");
         $user_notif->bind_param("is", $pickup_data['user_id'], $user_notif_message);
         $user_notif->execute();
         $user_notif->close();
         
-        // Notify driver about successful collection
         $driver_notif_message = "You have successfully collected waste from {$pickup_data['user_name']} at {$pickup_data['area']}.";
         $driver_notif = $conn->prepare("INSERT INTO notifications (driver_id, title, message, type) VALUES (?, 'Collection Confirmed', ?, 'success')");
         $driver_notif->bind_param("is", $driver_id, $driver_notif_message);
         $driver_notif->execute();
         $driver_notif->close();
         
-        // Notify admin
         $admin_notif_message = "Pickup from {$pickup_data['user_name']} at {$pickup_data['area']} has been collected.";
         $admin_notif = $conn->prepare("INSERT INTO notifications (admin_id, title, message, type) SELECT id, 'Pickup Collected', ?, 'info' FROM users WHERE is_admin = TRUE LIMIT 1");
         $admin_notif->bind_param("s", $admin_notif_message);
@@ -71,8 +71,8 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['collect_pickup'])) {
     $stmt->close();
 }
 
-// Fetch notifications
-$notif_sql = "SELECT * FROM notifications WHERE driver_id = ? ORDER BY created_at DESC LIMIT 10";
+// Fetch recent 3 notifications for dropdown
+$notif_sql = "SELECT * FROM notifications WHERE driver_id = ? ORDER BY created_at DESC LIMIT 3";
 $stmt_notif = $conn->prepare($notif_sql);
 $stmt_notif->bind_param("i", $driver_id);
 $stmt_notif->execute();
@@ -86,7 +86,6 @@ $stmt_unread->execute();
 $unread_count = $stmt_unread->get_result()->fetch_assoc()['count'];
 $stmt_unread->close();
 
-// Get assigned pickups with coordinates and user email
 $assigned_sql = "SELECT p.*, u.name as user_name, u.email as user_email
                 FROM pickups p 
                 JOIN users u ON p.user_id = u.id 
@@ -97,7 +96,6 @@ $stmt_assigned->bind_param("i", $driver_id);
 $stmt_assigned->execute();
 $assigned_result = $stmt_assigned->get_result();
 
-// Get history
 $history_sql = "SELECT p.*, u.name as user_name 
                 FROM pickups p 
                 JOIN users u ON p.user_id = u.id 
@@ -114,10 +112,12 @@ $history_result = $stmt_history->get_result();
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Driver Dashboard - EcoWaste</title>
-    <link rel="stylesheet" href="style.css">
-    <link rel="stylesheet" href="dashboard-style.css">
-    <link rel="stylesheet" href="admin-style.css">
-    <link rel="stylesheet" href="theme.css">
+    <link rel="stylesheet" href="style.css?v=2">
+    <link rel="stylesheet" href="dashboard-style.css?v=2">
+    <link rel="stylesheet" href="admin-style.css?v=2">
+    <link rel="stylesheet" href="theme.css?v=2">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css?v=2" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <style>
         .location-badge {
             display: inline-flex;
@@ -191,23 +191,31 @@ $history_result = $stmt_history->get_result();
             right: 0;
             margin-top: 0.5rem;
             width: 380px;
-            max-height: 500px;
-            overflow-y: auto;
+            max-height: 450px;
             background: var(--bg-secondary);
             border: 2px solid var(--border-color);
             border-radius: 16px;
             box-shadow: 0 10px 40px var(--shadow-color);
             display: none;
             z-index: 1000;
+            overflow: hidden;
+            flex-direction: column;
         }
         .notification-dropdown.show {
-            display: block;
+            display: flex;
         }
         .notification-header {
             padding: 1rem 1.25rem;
             border-bottom: 1px solid var(--border-color);
             font-weight: 700;
             color: var(--text-primary);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .notification-body {
+            flex: 1;
+            overflow-y: auto;
         }
         .notification-item {
             padding: 1rem 1.25rem;
@@ -240,13 +248,103 @@ $history_result = $stmt_history->get_result();
             text-align: center;
             color: var(--text-secondary);
         }
+        .notification-footer {
+            padding: 0.75rem 1.25rem;
+            text-align: center;
+            border-top: 1px solid var(--border-color);
+        }
+        .view-all-btn {
+            color: var(--primary);
+            font-weight: 600;
+            cursor: pointer;
+            font-size: 0.875rem;
+        }
+        .view-all-btn:hover {
+            text-decoration: underline;
+        }
+        .mark-all-read-btn {
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            color: white;
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            font-size: 0.75rem;
+            transition: all 0.3s ease;
+        }
+        .mark-all-read-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(14, 165, 233, 0.4);
+        }
+        
+        /* All Notifications Modal */
+        .all-notifications-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.8);
+            z-index: 10000;
+            align-items: center;
+            justify-content: center;
+        }
+        .all-notifications-modal.show {
+            display: flex;
+        }
+        .modal-content {
+            background: var(--bg-secondary);
+            border-radius: 24px;
+            max-width: 700px;
+            width: 90%;
+            max-height: 85vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 25px 60px var(--shadow-color);
+        }
+        .modal-header {
+            padding: 1.5rem;
+            border-bottom: 2px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .modal-header h2 {
+            margin: 0;
+            font-size: 1.5rem;
+        }
+        .modal-body {
+            padding: 1rem;
+            overflow-y: auto;
+            flex: 1;
+        }
+        .modal-close {
+            background: var(--bg-tertiary);
+            border: 2px solid var(--border-color);
+            color: var(--text-primary);
+            cursor: pointer;
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            font-size: 1.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s ease;
+        }
+        .modal-close:hover {
+            border-color: var(--primary);
+            color: var(--primary);
+        }
     </style>
 </head>
 <body>
     <header>
         <nav>
             <div class="container">
-                <a href="#" class="logo">Driver Panel</a>
+                <a href="driver_dashboard.php" class="logo">Driver Panel</a>
                 <button id="theme-toggle" class="theme-toggle" aria-label="Toggle theme"></button>
                 <ul class="nav-links">
                     <li style="position: relative;">
@@ -260,18 +358,28 @@ $history_result = $stmt_history->get_result();
                             <?php endif; ?>
                         </div>
                         <div class="notification-dropdown" id="notificationDropdown">
-                            <div class="notification-header">Notifications</div>
+                            <div class="notification-header">
+                                Notifications
+                                <button class="mark-all-read-btn" onclick="markAllRead()">Mark All</button>
+                            </div>
+                            <div class="notification-body">
+                                <?php if ($notifications->num_rows > 0): ?>
+                                    <?php while($notif = $notifications->fetch_assoc()): ?>
+                                    <div class="notification-item <?= !$notif['is_read'] ? 'unread' : '' ?>" 
+                                         onclick="markAsRead(<?= $notif['id'] ?>)">
+                                        <div class="notification-title"><?= htmlspecialchars($notif['title']) ?></div>
+                                        <div class="notification-message"><?= htmlspecialchars($notif['message']) ?></div>
+                                        <div class="notification-time"><?= date('M j, Y g:i A', strtotime($notif['created_at'])) ?></div>
+                                    </div>
+                                    <?php endwhile; ?>
+                                <?php else: ?>
+                                    <div class="notification-empty">No notifications</div>
+                                <?php endif; ?>
+                            </div>
                             <?php if ($notifications->num_rows > 0): ?>
-                                <?php while($notif = $notifications->fetch_assoc()): ?>
-                                <div class="notification-item <?= !$notif['is_read'] ? 'unread' : '' ?>" 
-                                     onclick="markAsRead(<?= $notif['id'] ?>)">
-                                    <div class="notification-title"><?= htmlspecialchars($notif['title']) ?></div>
-                                    <div class="notification-message"><?= htmlspecialchars($notif['message']) ?></div>
-                                    <div class="notification-time"><?= date('M j, Y g:i A', strtotime($notif['created_at'])) ?></div>
-                                </div>
-                                <?php endwhile; ?>
-                            <?php else: ?>
-                                <div class="notification-empty">No notifications</div>
+                            <div class="notification-footer">
+                                <div class="view-all-btn" onclick="showAllNotifications()">View All Notifications</div>
+                            </div>
                             <?php endif; ?>
                         </div>
                     </li>
@@ -280,6 +388,20 @@ $history_result = $stmt_history->get_result();
             </div>
         </nav>
     </header>
+
+    <!-- All Notifications Modal -->
+    <div class="all-notifications-modal" id="allNotificationsModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>All Notifications</h2>
+                <button class="modal-close" onclick="closeAllNotifications()">&times;</button>
+            </div>
+            <div class="modal-body" id="allNotificationsBody">
+                <!-- Will be populated by JavaScript -->
+            </div>
+        </div>
+    </div>
+
     <main class="dashboard-main">
         <div class="container">
             <div class="dashboard-header">
@@ -403,28 +525,63 @@ $history_result = $stmt_history->get_result();
 
     <script src="theme.js"></script>
     <script>
-        window.gm_authFailure = function() {
-            console.error('Google Maps authentication failed');
-            if(window.showAlert) {
-                showAlert('Google Maps failed to load. Please check API key configuration.', 'error');
-            }
-        };
-    </script>
-    <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBGfAE5JUWf6gMj80B5SOmF_aJ9blsRFes&loading=async&callback=initGoogleMaps"></script>
-    
-    <script>
         let viewMapInstance;
-        let currentMarker;
+        let viewMarker;
 
-        function initGoogleMaps() {
-            console.log('Google Maps initialized');
-        }
-
+        // Notification Functions
         function toggleNotifications() {
             const dropdown = document.getElementById('notificationDropdown');
             dropdown.classList.toggle('show');
         }
 
+        function markAsRead(notifId) {
+            window.location.href = `driver_dashboard.php?mark_read=1&notif_id=${notifId}`;
+        }
+
+        function markAllRead() {
+            if (confirm('Mark all notifications as read?')) {
+                window.location.href = 'driver_dashboard.php?mark_all_read=1';
+            }
+        }
+
+        function showAllNotifications() {
+            document.getElementById('allNotificationsModal').classList.add('show');
+            document.getElementById('notificationDropdown').classList.remove('show');
+            fetchAllNotifications();
+        }
+
+        function closeAllNotifications() {
+            document.getElementById('allNotificationsModal').classList.remove('show');
+        }
+
+        function fetchAllNotifications() {
+            fetch('get_all_notifications.php')
+                .then(response => response.json())
+                .then(data => {
+                    const body = document.getElementById('allNotificationsBody');
+                    if (data.error) {
+                        body.innerHTML = '<div class="notification-empty">Error loading notifications</div>';
+                        return;
+                    }
+                    if (data.length === 0) {
+                        body.innerHTML = '<div class="notification-empty">No notifications</div>';
+                        return;
+                    }
+                    body.innerHTML = data.map(notif => `
+                        <div class="notification-item ${!notif.is_read ? 'unread' : ''}" onclick="markAsRead(${notif.id})">
+                            <div class="notification-title">${notif.title}</div>
+                            <div class="notification-message">${notif.message}</div>
+                            <div class="notification-time">${notif.created_at}</div>
+                        </div>
+                    `).join('');
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    document.getElementById('allNotificationsBody').innerHTML = '<div class="notification-empty">Error loading notifications</div>';
+                });
+        }
+
+        // Close dropdown when clicking outside
         document.addEventListener('click', function(event) {
             const bell = document.querySelector('.notification-bell');
             const dropdown = document.getElementById('notificationDropdown');
@@ -433,41 +590,37 @@ $history_result = $stmt_history->get_result();
             }
         });
 
-        function markAsRead(notifId) {
-            window.location.href = `driver_dashboard.php?mark_read=1&notif_id=${notifId}`;
-        }
+        // Close modal when clicking outside
+        document.getElementById('allNotificationsModal')?.addEventListener('click', function(event) {
+            if (event.target === this) {
+                closeAllNotifications();
+            }
+        });
 
-        async function showLocationModal(lat, lng, userName, address) {
+        function showLocationModal(lat, lng, userName, address) {
             document.getElementById('locationModal').style.display = 'flex';
             document.getElementById('modalTitle').textContent = `Pickup Location: ${userName}`;
             document.getElementById('modalSubtitle').textContent = `📍 ${address}`;
             
-            setTimeout(async () => {
-                const { Map } = await google.maps.importLibrary("maps");
-                const { AdvancedMarkerElement } = await google.maps.importLibrary("marker");
-                
+            setTimeout(() => {
                 if (!viewMapInstance) {
-                    viewMapInstance = new Map(document.getElementById('viewMap'), {
-                        center: { lat: lat, lng: lng },
-                        zoom: 16,
-                        mapTypeControl: true,
-                        streetViewControl: true,
-                        fullscreenControl: true,
-                        mapId: "DRIVER_VIEW_MAP"
-                    });
+                    viewMapInstance = L.map('viewMap').setView([lat, lng], 16);
+                    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                        attribution: '© OpenStreetMap contributors',
+                        maxZoom: 19
+                    }).addTo(viewMapInstance);
                 } else {
-                    viewMapInstance.setCenter({ lat: lat, lng: lng });
+                    viewMapInstance.setView([lat, lng], 16);
+                    if (viewMarker) {
+                        viewMapInstance.removeLayer(viewMarker);
+                    }
                 }
                 
-                if (currentMarker) {
-                    currentMarker.map = null;
-                }
-
-                currentMarker = new AdvancedMarkerElement({
-                    map: viewMapInstance,
-                    position: { lat: lat, lng: lng },
-                    title: address
-                });
+                viewMarker = L.marker([lat, lng]).addTo(viewMapInstance)
+                    .bindPopup(`<b>${userName}</b><br>${address}`)
+                    .openPopup();
+                
+                setTimeout(() => viewMapInstance.invalidateSize(), 100);
             }, 100);
         }
 
