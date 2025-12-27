@@ -149,22 +149,18 @@ $unread_count = $stmt_unread->get_result()->fetch_assoc()['count'];
 $stmt_unread->close();
 
 // Dashboard Statistics
-// 1. Today's Scheduled Pickups
 $today_pickups_sql = "SELECT COUNT(*) as total FROM pickups WHERE DATE(pickup_date) = CURDATE()";
 $today_pickups_res = $conn->query($today_pickups_sql);
 $today_pickups = $today_pickups_res->fetch_assoc()['total'];
 
-// 2. Completed Today
 $completed_today_sql = "SELECT COUNT(*) as total FROM pickups WHERE status = 'Completed' AND DATE(updated_at) = CURDATE()";
 $completed_today_res = $conn->query($completed_today_sql);
 $completed_today = $completed_today_res->fetch_assoc()['total'];
 
-// 3. Pending Today
 $pending_today_sql = "SELECT COUNT(*) as total FROM pickups WHERE DATE(pickup_date) = CURDATE() AND status IN ('Scheduled', 'Assigned', 'Out for Pickup')";
 $pending_today_res = $conn->query($pending_today_sql);
 $pending_today = $pending_today_res->fetch_assoc()['total'];
 
-// 4. Collected Today
 $collected_today_sql = "SELECT COUNT(*) as total FROM pickups WHERE status IN ('Collected', 'Collected by Driver') AND DATE(updated_at) = CURDATE()";
 $collected_today_res = $conn->query($collected_today_sql);
 $collected_today = $collected_today_res->fetch_assoc()['total'];
@@ -200,6 +196,7 @@ $scheduled_result = $conn->query($scheduled_sql);
 $assigned_sql = "SELECT p.*, u.name as user_name, d.name as driver_name FROM pickups p JOIN users u ON p.user_id = u.id LEFT JOIN drivers d ON p.driver_id = d.id WHERE u.is_deleted = FALSE AND p.status = 'Assigned' ORDER BY p.requested_at DESC";
 $assigned_result = $conn->query($assigned_sql);
 
+// Added: Out for Pickup Query
 $out_for_pickup_sql = "SELECT p.*, u.name as user_name, d.name as driver_name FROM pickups p JOIN users u ON p.user_id = u.id LEFT JOIN drivers d ON p.driver_id = d.id WHERE u.is_deleted = FALSE AND p.status = 'Out for Pickup' ORDER BY p.requested_at DESC";
 $out_for_pickup_result = $conn->query($out_for_pickup_sql);
 
@@ -212,11 +209,11 @@ $completed_result = $conn->query($completed_sql);
 // Count pickups by status
 $scheduled_count = $scheduled_result->num_rows;
 $assigned_count = $assigned_result->num_rows;
-$out_for_pickup_count = $out_for_pickup_result->num_rows;
+$out_for_pickup_count = $out_for_pickup_result->num_rows; // Added count
 $collected_count = $collected_result->num_rows;
 $completed_count = $completed_result->num_rows;
 
-// Fetch active drivers
+// Fetch all active drivers
 $drivers_result = $conn->query("SELECT id, name FROM drivers WHERE is_deleted = FALSE");
 $drivers_list = $drivers_result->fetch_all(MYSQLI_ASSOC);
 
@@ -224,7 +221,7 @@ $drivers_list = $drivers_result->fetch_all(MYSQLI_ASSOC);
 $users_sql = "SELECT name, email, created_at, id FROM users WHERE is_admin = FALSE AND is_deleted = FALSE ORDER BY created_at DESC";
 $users_result = $conn->query($users_sql);
 
-// Fetch active drivers list
+// Fetch active drivers
 $all_drivers_sql = "SELECT name, email, created_at, id FROM drivers WHERE is_deleted = FALSE ORDER BY created_at DESC";
 $all_drivers_result = $conn->query($all_drivers_sql);
 ?>
@@ -240,53 +237,313 @@ $all_drivers_result = $conn->query($all_drivers_sql);
     <link rel="stylesheet" href="theme.css?v=2">
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap" rel="stylesheet">
     <style>
-        .btn-delete { background: linear-gradient(135deg, #ef4444, #dc2626); color: white; padding: 0.5rem 1rem; border: none; border-radius: 8px; cursor: pointer; font-size: 0.85rem; font-weight: 600; transition: all 0.3s ease; }
-        .btn-delete:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(239, 68, 68, 0.4); }
-        .btn-complete { background: linear-gradient(135deg, #10b981, #059669); color: white; padding: 0.5rem 1rem; border: none; border-radius: 8px; cursor: pointer; font-size: 0.85rem; font-weight: 600; transition: all 0.3s ease; }
-        .btn-complete:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(16, 185, 129, 0.4); }
-        .action-buttons { display: flex; gap: 0.5rem; }
-        .main-tabs { display: flex; gap: 0.5rem; margin-bottom: 2rem; border-bottom: 2px solid var(--border-color); flex-wrap: wrap; }
-        .main-tab { padding: 1rem 1.5rem; background: none; border: none; color: var(--text-secondary); cursor: pointer; font-weight: 600; position: relative; transition: all 0.3s ease; font-size: 0.95rem; }
-        .main-tab.active { color: var(--primary); }
-        .main-tab.active::after { content: ''; position: absolute; bottom: -2px; left: 0; width: 100%; height: 2px; background: var(--primary); }
-        .main-tab-content { display: none; }
-        .main-tab-content.active { display: block; }
-        .sub-tabs { display: flex; gap: 0.5rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
-        .sub-tab { padding: 0.625rem 1.25rem; background: var(--bg-tertiary); border: 2px solid var(--border-color); border-radius: 10px; color: var(--text-secondary); cursor: pointer; font-weight: 600; font-size: 0.875rem; transition: all 0.3s ease; }
-        .sub-tab.active { background: linear-gradient(135deg, var(--primary), var(--secondary)); color: white; border-color: transparent; box-shadow: 0 4px 12px rgba(14, 165, 233, 0.3); }
-        .sub-tab-content { display: none; }
-        .sub-tab-content.active { display: block; }
-        .stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.5rem; margin-bottom: 2rem; }
-        .stat-box { background: var(--bg-tertiary); padding: 1.5rem; border-radius: 16px; border: 2px solid var(--border-color); transition: all 0.3s ease; }
-        .stat-box:hover { transform: translateY(-2px); border-color: var(--primary); box-shadow: 0 8px 20px var(--shadow-color); }
-        .stat-box h4 { font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem; font-weight: 600; }
-        .stat-box .value { font-size: 2rem; font-weight: 800; color: var(--primary); font-family: 'Space Grotesk', sans-serif; }
-        .notification-bell { position: relative; cursor: pointer; padding: 0.5rem; }
-        .notification-badge { position: absolute; top: 0; right: 0; background: linear-gradient(135deg, #ef4444, #dc2626); color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 0.7rem; font-weight: 700; }
-        .notification-dropdown { position: absolute; top: 100%; right: 0; margin-top: 0.5rem; width: 380px; max-height: 450px; background: var(--bg-secondary); border: 2px solid var(--border-color); border-radius: 16px; box-shadow: 0 10px 40px var(--shadow-color); display: none; z-index: 1000; overflow: hidden; flex-direction: column; }
-        .notification-dropdown.show { display: flex; }
-        .notification-header { padding: 1rem 1.25rem; border-bottom: 1px solid var(--border-color); font-weight: 700; color: var(--text-primary); display: flex; justify-content: space-between; align-items: center; }
-        .notification-body { flex: 1; overflow-y: auto; }
-        .notification-item { padding: 1rem 1.25rem; border-bottom: 1px solid var(--border-color); cursor: pointer; transition: background 0.2s ease; }
-        .notification-item:hover { background: var(--bg-tertiary); }
-        .notification-item.unread { background: rgba(14, 165, 233, 0.05); }
-        .notification-title { font-weight: 600; color: var(--text-primary); margin-bottom: 0.25rem; }
-        .notification-message { font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem; }
-        .notification-time { font-size: 0.75rem; color: var(--text-secondary); }
-        .notification-empty { padding: 2rem; text-align: center; color: var(--text-secondary); }
-        .notification-footer { padding: 0.75rem 1.25rem; text-align: center; border-top: 1px solid var(--border-color); }
-        .view-all-btn { color: var(--primary); font-weight: 600; cursor: pointer; font-size: 0.875rem; }
-        .view-all-btn:hover { text-decoration: underline; }
-        .mark-all-read-btn { background: linear-gradient(135deg, var(--primary), var(--secondary)); color: white; padding: 0.5rem 1rem; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 0.75rem; transition: all 0.3s ease; }
-        .mark-all-read-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(14, 165, 233, 0.4); }
-        .all-notifications-modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 10000; align-items: center; justify-content: center; }
-        .all-notifications-modal.show { display: flex; }
-        .modal-content { background: var(--bg-secondary); border-radius: 24px; max-width: 700px; width: 90%; max-height: 85vh; display: flex; flex-direction: column; box-shadow: 0 25px 60px var(--shadow-color); }
-        .modal-header { padding: 1.5rem; border-bottom: 2px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; }
-        .modal-header h2 { margin: 0; font-size: 1.5rem; }
-        .modal-body { padding: 1rem; overflow-y: auto; flex: 1; }
-        .modal-close { background: var(--bg-tertiary); border: 2px solid var(--border-color); color: var(--text-primary); cursor: pointer; width: 40px; height: 40px; border-radius: 10px; font-size: 1.5rem; display: flex; align-items: center; justify-content: center; transition: all 0.3s ease; }
-        .modal-close:hover { border-color: var(--primary); color: var(--primary); }
+        .btn-delete {
+            background: linear-gradient(135deg, #ef4444, #dc2626);
+            color: white;
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+        .btn-delete:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(239, 68, 68, 0.4);
+        }
+
+        .btn-complete {
+            background: linear-gradient(135deg, #10b981, #059669);
+            color: white;
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+        .btn-complete:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(16, 185, 129, 0.4);
+        }
+
+        .action-buttons {
+            display: flex;
+            gap: 0.5rem;
+        }
+        
+        .main-tabs {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 2rem;
+            border-bottom: 2px solid var(--border-color);
+            flex-wrap: wrap;
+        }
+        .main-tab {
+            padding: 1rem 1.5rem;
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-weight: 600;
+            position: relative;
+            transition: all 0.3s ease;
+            font-size: 0.95rem;
+        }
+        .main-tab.active {
+            color: var(--primary);
+        }
+        .main-tab.active::after {
+            content: '';
+            position: absolute;
+            bottom: -2px;
+            left: 0;
+            width: 100%;
+            height: 2px;
+            background: var(--primary);
+        }
+        .main-tab-content {
+            display: none;
+        }
+        .main-tab-content.active {
+            display: block;
+        }
+        
+        .sub-tabs {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1.5rem;
+            flex-wrap: wrap;
+        }
+        .sub-tab {
+            padding: 0.625rem 1.25rem;
+            background: var(--bg-tertiary);
+            border: 2px solid var(--border-color);
+            border-radius: 10px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 0.875rem;
+            transition: all 0.3s ease;
+        }
+        .sub-tab.active {
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            color: white;
+            border-color: transparent;
+            box-shadow: 0 4px 12px rgba(14, 165, 233, 0.3);
+        }
+        .sub-tab-content {
+            display: none;
+        }
+        .sub-tab-content.active {
+            display: block;
+        }
+        
+        .stats-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+        .stat-box {
+            background: var(--bg-tertiary);
+            padding: 1.5rem;
+            border-radius: 16px;
+            border: 2px solid var(--border-color);
+            transition: all 0.3s ease;
+        }
+        .stat-box:hover {
+            transform: translateY(-2px);
+            border-color: var(--primary);
+            box-shadow: 0 8px 20px var(--shadow-color);
+        }
+        .stat-box h4 {
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.5rem;
+            font-weight: 600;
+        }
+        .stat-box .value {
+            font-size: 2rem;
+            font-weight: 800;
+            color: var(--primary);
+            font-family: 'Space Grotesk', sans-serif;
+        }
+        
+        .notification-bell {
+            position: relative;
+            cursor: pointer;
+            padding: 0.5rem;
+        }
+        .notification-badge {
+            position: absolute;
+            top: 0;
+            right: 0;
+            background: linear-gradient(135deg, #ef4444, #dc2626);
+            color: white;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.7rem;
+            font-weight: 700;
+        }
+        .notification-dropdown {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            margin-top: 0.5rem;
+            width: 380px;
+            max-height: 450px;
+            background: var(--bg-secondary);
+            border: 2px solid var(--border-color);
+            border-radius: 16px;
+            box-shadow: 0 10px 40px var(--shadow-color);
+            display: none;
+            z-index: 1000;
+            overflow: hidden;
+            flex-direction: column;
+        }
+        .notification-dropdown.show {
+            display: flex;
+        }
+        .notification-header {
+            padding: 1rem 1.25rem;
+            border-bottom: 1px solid var(--border-color);
+            font-weight: 700;
+            color: var(--text-primary);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .notification-body {
+            flex: 1;
+            overflow-y: auto;
+        }
+        .notification-item {
+            padding: 1rem 1.25rem;
+            border-bottom: 1px solid var(--border-color);
+            cursor: pointer;
+            transition: background 0.2s ease;
+        }
+        .notification-item:hover {
+            background: var(--bg-tertiary);
+        }
+        .notification-item.unread {
+            background: rgba(14, 165, 233, 0.05);
+        }
+        .notification-title {
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 0.25rem;
+        }
+        .notification-message {
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.5rem;
+        }
+        .notification-time {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+        }
+        .notification-empty {
+            padding: 2rem;
+            text-align: center;
+            color: var(--text-secondary);
+        }
+        .notification-footer {
+            padding: 0.75rem 1.25rem;
+            text-align: center;
+            border-top: 1px solid var(--border-color);
+        }
+        .view-all-btn {
+            color: var(--primary);
+            font-weight: 600;
+            cursor: pointer;
+            font-size: 0.875rem;
+        }
+        .view-all-btn:hover {
+            text-decoration: underline;
+        }
+        .mark-all-read-btn {
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            color: white;
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            font-size: 0.75rem;
+            transition: all 0.3s ease;
+        }
+        .mark-all-read-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(14, 165, 233, 0.4);
+        }
+        
+        .all-notifications-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.8);
+            z-index: 10000;
+            align-items: center;
+            justify-content: center;
+        }
+        .all-notifications-modal.show {
+            display: flex;
+        }
+        .modal-content {
+            background: var(--bg-secondary);
+            border-radius: 24px;
+            max-width: 700px;
+            width: 90%;
+            max-height: 85vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 25px 60px var(--shadow-color);
+        }
+        .modal-header {
+            padding: 1.5rem;
+            border-bottom: 2px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .modal-header h2 {
+            margin: 0;
+            font-size: 1.5rem;
+        }
+        .modal-body {
+            padding: 1rem;
+            overflow-y: auto;
+            flex: 1;
+        }
+        .modal-close {
+            background: var(--bg-tertiary);
+            border: 2px solid var(--border-color);
+            color: var(--text-primary);
+            cursor: pointer;
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            font-size: 1.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s ease;
+        }
+        .modal-close:hover {
+            border-color: var(--primary);
+            color: var(--primary);
+        }
     </style>
 </head>
 <body>
@@ -307,11 +564,15 @@ $all_drivers_result = $conn->query($all_drivers_sql);
                             <?php endif; ?>
                         </div>
                         <div class="notification-dropdown" id="notificationDropdown">
-                            <div class="notification-header">Notifications <button class="mark-all-read-btn" onclick="markAllRead()">Mark All</button></div>
+                            <div class="notification-header">
+                                Notifications
+                                <button class="mark-all-read-btn" onclick="markAllRead()">Mark All</button>
+                            </div>
                             <div class="notification-body">
                                 <?php if ($notifications->num_rows > 0): ?>
                                     <?php while($notif = $notifications->fetch_assoc()): ?>
-                                    <div class="notification-item <?= !$notif['is_read'] ? 'unread' : '' ?>" onclick="markAsRead(<?= $notif['id'] ?>)">
+                                    <div class="notification-item <?= !$notif['is_read'] ? 'unread' : '' ?>" 
+                                         onclick="markAsRead(<?= $notif['id'] ?>)">
                                         <div class="notification-title"><?= htmlspecialchars($notif['title']) ?></div>
                                         <div class="notification-message"><?= htmlspecialchars($notif['message']) ?></div>
                                         <div class="notification-time"><?= date('M j, Y g:i A', strtotime($notif['created_at'])) ?></div>
@@ -322,7 +583,9 @@ $all_drivers_result = $conn->query($all_drivers_sql);
                                 <?php endif; ?>
                             </div>
                             <?php if ($notifications->num_rows > 0): ?>
-                            <div class="notification-footer"><div class="view-all-btn" onclick="showAllNotifications()">View All Notifications</div></div>
+                            <div class="notification-footer">
+                                <div class="view-all-btn" onclick="showAllNotifications()">View All Notifications</div>
+                            </div>
                             <?php endif; ?>
                         </div>
                     </li>
@@ -332,19 +595,22 @@ $all_drivers_result = $conn->query($all_drivers_sql);
         </nav>
     </header>
 
-    <!-- All Notifications Modal -->
     <div class="all-notifications-modal" id="allNotificationsModal">
         <div class="modal-content">
-            <div class="modal-header"><h2>All Notifications</h2><button class="modal-close" onclick="closeAllNotifications()">&times;</button></div>
+            <div class="modal-header">
+                <h2>All Notifications</h2>
+                <button class="modal-close" onclick="closeAllNotifications()">&times;</button>
+            </div>
             <div class="modal-body" id="allNotificationsBody"></div>
         </div>
     </div>
 
     <main class="dashboard-main">
         <div class="container">
-            <div class="dashboard-header"><h1>Welcome, <?= htmlspecialchars($_SESSION['admin_name']) ?>!</h1></div>
+            <div class="dashboard-header">
+                <h1>Welcome, <?= htmlspecialchars($_SESSION['admin_name']) ?>!</h1>
+            </div>
 
-            <!-- Main Tabs -->
             <div class="main-tabs">
                 <button class="main-tab active" onclick="switchMainTab('dashboard')">Dashboard</button>
                 <button class="main-tab" onclick="switchMainTab('pickups')">Pickup Requests</button>
@@ -352,19 +618,29 @@ $all_drivers_result = $conn->query($all_drivers_sql);
                 <button class="main-tab" onclick="switchMainTab('users')">Manage Users</button>
             </div>
 
-            <!-- Dashboard Tab -->
             <div id="dashboard-tab" class="main-tab-content active">
                 <section class="dashboard-section">
                     <h2>Today's Overview</h2>
                     <div class="stats-row">
-                        <div class="stat-box"><h4>Scheduled</h4><div class="value"><?= $today_pickups ?></div></div>
-                        <div class="stat-box"><h4>Collected</h4><div class="value"><?= $collected_today ?></div></div>
-                        <div class="stat-box"><h4>Completed</h4><div class="value"><?= $completed_today ?></div></div>
-                        <div class="stat-box"><h4>Pending</h4><div class="value"><?= $pending_today ?></div></div>
+                        <div class="stat-box">
+                            <h4>Scheduled for Today</h4>
+                            <div class="value"><?= $today_pickups ?></div>
+                        </div>
+                        <div class="stat-box">
+                            <h4>Collected Today</h4>
+                            <div class="value"><?= $collected_today ?></div>
+                        </div>
+                        <div class="stat-box">
+                            <h4>Completed Today</h4>
+                            <div class="value"><?= $completed_today ?></div>
+                        </div>
+                        <div class="stat-box">
+                            <h4>Pending Today</h4>
+                            <div class="value"><?= $pending_today ?></div>
+                        </div>
                     </div>
                 </section>
-
-                <section class="dashboard-section">
+                 <section class="dashboard-section">
                     <h2>Monthly Statistics</h2>
                     <div class="stats-row">
                         <div class="stat-box"><h4>Total Monthly</h4><div class="value"><?= $monthly_pickups ?></div></div>
@@ -401,10 +677,10 @@ $all_drivers_result = $conn->query($all_drivers_sql);
                 </section>
             </div>
 
-            <!-- Pickups Tab -->
             <div id="pickups-tab" class="main-tab-content">
                 <section class="dashboard-section">
                     <h2>All Pickup Requests</h2>
+                    
                     <div class="sub-tabs">
                         <button class="sub-tab active" onclick="switchPickupSubTab('scheduled')">Scheduled (<?= $scheduled_count ?>)</button>
                         <button class="sub-tab" onclick="switchPickupSubTab('assigned')">Assigned (<?= $assigned_count ?>)</button>
@@ -413,141 +689,285 @@ $all_drivers_result = $conn->query($all_drivers_sql);
                         <button class="sub-tab" onclick="switchPickupSubTab('completed')">Completed (<?= $completed_count ?>)</button>
                     </div>
 
-                    <!-- Scheduled -->
                     <div id="scheduled-subtab" class="sub-tab-content active">
                         <div class="table-container">
                             <table>
-                                <thead><tr><th>User & Location</th><th>Date & Time</th><th>Waste Type</th><th>Action</th></tr></thead>
+                                <thead>
+                                    <tr>
+                                        <th>User & Location</th>
+                                        <th>Date & Time</th>
+                                        <th>Waste Type</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
                                 <tbody>
-                                    <?php if ($scheduled_result->num_rows > 0): $scheduled_result->data_seek(0); while($row = $scheduled_result->fetch_assoc()): ?>
+                                    <?php if ($scheduled_result->num_rows > 0): ?>
+                                        <?php while($row = $scheduled_result->fetch_assoc()): ?>
                                         <tr>
-                                            <td data-label="User & Location"><?= htmlspecialchars($row['user_name']) ?><br><small><?= htmlspecialchars($row['area']) ?>, <?= htmlspecialchars($row['city']) ?></small></td>
-                                            <td data-label="Date & Time"><?= htmlspecialchars($row['pickup_date']) ?><br><small><?= htmlspecialchars($row['time_slot']) ?></small></td>
+                                            <td data-label="User & Location">
+                                                <?= htmlspecialchars($row['user_name']) ?><br>
+                                                <small><?= htmlspecialchars($row['area']) ?>, <?= htmlspecialchars($row['city']) ?></small>
+                                            </td>
+                                            <td data-label="Date & Time">
+                                                <?= htmlspecialchars($row['pickup_date']) ?><br>
+                                                <small><?= htmlspecialchars($row['time_slot']) ?></small>
+                                            </td>
                                             <td data-label="Waste Type"><?= htmlspecialchars($row['waste_type']) ?></td>
                                             <td data-label="Action">
-                                                <form method="POST" class="status-form" onsubmit="return validateAssign(this)">
+                                                <form method="POST" action="admin_dashboard.php" class="status-form" onsubmit="return validateAssign(this)">
                                                     <input type="hidden" name="pickup_id" value="<?= $row['id'] ?>">
-                                                    <select name="driver_id" required><option value="">Select Driver</option><?php foreach ($drivers_list as $driver): ?><option value="<?= $driver['id'] ?>"><?= htmlspecialchars($driver['name']) ?></option><?php endforeach; ?></select>
+                                                    <select name="driver_id" required>
+                                                        <option value="">Select Driver</option>
+                                                        <?php foreach ($drivers_list as $driver): ?>
+                                                        <option value="<?= $driver['id'] ?>"><?= htmlspecialchars($driver['name']) ?></option>
+                                                        <?php endforeach; ?>
+                                                    </select>
                                                     <button type="submit" name="assign_driver">Assign</button>
                                                 </form>
                                             </td>
                                         </tr>
-                                    <?php endwhile; else: ?><tr><td colspan="4">No scheduled pickups.</td></tr><?php endif; ?>
+                                        <?php endwhile; ?>
+                                    <?php else: ?>
+                                        <tr><td colspan="4">No scheduled pickups.</td></tr>
+                                    <?php endif; ?>
                                 </tbody>
                             </table>
                         </div>
                     </div>
 
-                    <!-- Assigned -->
                     <div id="assigned-subtab" class="sub-tab-content">
                         <div class="table-container">
                             <table>
-                                <thead><tr><th>User & Location</th><th>Date & Time</th><th>Waste Type</th><th>Assigned Driver</th></tr></thead>
+                                <thead>
+                                    <tr>
+                                        <th>User & Location</th>
+                                        <th>Date & Time</th>
+                                        <th>Waste Type</th>
+                                        <th>Assigned Driver</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
                                 <tbody>
-                                    <?php if ($assigned_result->num_rows > 0): $assigned_result->data_seek(0); while($row = $assigned_result->fetch_assoc()): ?>
+                                    <?php if ($assigned_result->num_rows > 0): ?>
+                                        <?php while($row = $assigned_result->fetch_assoc()): ?>
                                         <tr>
-                                            <td data-label="User & Location"><?= htmlspecialchars($row['user_name']) ?><br><small><?= htmlspecialchars($row['area']) ?>, <?= htmlspecialchars($row['city']) ?></small></td>
-                                            <td data-label="Date & Time"><?= htmlspecialchars($row['pickup_date']) ?><br><small><?= htmlspecialchars($row['time_slot']) ?></small></td>
+                                            <td data-label="User & Location">
+                                                <?= htmlspecialchars($row['user_name']) ?><br>
+                                                <small><?= htmlspecialchars($row['area']) ?>, <?= htmlspecialchars($row['city']) ?></small>
+                                            </td>
+                                            <td data-label="Date & Time">
+                                                <?= htmlspecialchars($row['pickup_date']) ?><br>
+                                                <small><?= htmlspecialchars($row['time_slot']) ?></small>
+                                            </td>
                                             <td data-label="Waste Type"><?= htmlspecialchars($row['waste_type']) ?></td>
                                             <td data-label="Assigned Driver"><?= htmlspecialchars($row['driver_name']) ?></td>
+                                            <td data-label="Action">
+                                                <form action="update_status.php" method="POST" style="display:inline;" onsubmit="return handleCollectedCancel(event, this)">
+                                                    <input type="hidden" name="pickup_id" value="<?= $row['id'] ?>">
+                                                    <input type="hidden" name="new_status" value="Cancelled">
+                                                    <button type="submit" class="btn-delete">Cancel</button>
+                                                </form>
+                                            </td>
                                         </tr>
-                                    <?php endwhile; else: ?><tr><td colspan="4">No assigned pickups.</td></tr><?php endif; ?>
+                                        <?php endwhile; ?>
+                                    <?php else: ?>
+                                        <tr><td colspan="5">No assigned pickups.</td></tr>
+                                    <?php endif; ?>
                                 </tbody>
                             </table>
                         </div>
                     </div>
 
-                    <!-- Out for Pickup -->
+                    <!-- Added: Out for Pickup Sub-tab -->
                     <div id="out-for-pickup-subtab" class="sub-tab-content">
                         <div class="table-container">
                             <table>
-                                <thead><tr><th>User & Location</th><th>Date & Time</th><th>Waste Type</th><th>Driver</th></tr></thead>
+                                <thead>
+                                    <tr>
+                                        <th>User & Location</th>
+                                        <th>Date & Time</th>
+                                        <th>Waste Type</th>
+                                        <th>Driver (On the way)</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
                                 <tbody>
-                                    <?php if ($out_for_pickup_result->num_rows > 0): while($row = $out_for_pickup_result->fetch_assoc()): ?>
+                                    <?php if ($out_for_pickup_result->num_rows > 0): ?>
+                                        <?php while($row = $out_for_pickup_result->fetch_assoc()): ?>
                                         <tr>
-                                            <td data-label="User & Location"><?= htmlspecialchars($row['user_name']) ?><br><small><?= htmlspecialchars($row['area']) ?>, <?= htmlspecialchars($row['city']) ?></small></td>
-                                            <td data-label="Date & Time"><?= htmlspecialchars($row['pickup_date']) ?><br><small><?= htmlspecialchars($row['time_slot']) ?></small></td>
+                                            <td data-label="User & Location">
+                                                <?= htmlspecialchars($row['user_name']) ?><br>
+                                                <small><?= htmlspecialchars($row['area']) ?>, <?= htmlspecialchars($row['city']) ?></small>
+                                            </td>
+                                            <td data-label="Date & Time">
+                                                <?= htmlspecialchars($row['pickup_date']) ?><br>
+                                                <small><?= htmlspecialchars($row['time_slot']) ?></small>
+                                            </td>
                                             <td data-label="Waste Type"><?= htmlspecialchars($row['waste_type']) ?></td>
-                                            <td data-label="Driver"><?= htmlspecialchars($row['driver_name']) ?></td>
+                                            <td data-label="Driver (On the way)"><?= htmlspecialchars($row['driver_name']) ?></td>
+                                            <td data-label="Action">
+                                                <form action="update_status.php" method="POST" style="display:inline;" onsubmit="return handleCollectedCancel(event, this)">
+                                                    <input type="hidden" name="pickup_id" value="<?= $row['id'] ?>">
+                                                    <input type="hidden" name="new_status" value="Cancelled">
+                                                    <button type="submit" class="btn-delete">Cancel</button>
+                                                </form>
+                                            </td>
                                         </tr>
-                                    <?php endwhile; else: ?><tr><td colspan="4">No pickups currently "Out for Pickup".</td></tr><?php endif; ?>
+                                        <?php endwhile; ?>
+                                    <?php else: ?>
+                                        <tr><td colspan="5">No pickups currently out for collection.</td></tr>
+                                    <?php endif; ?>
                                 </tbody>
                             </table>
                         </div>
                     </div>
 
-                    <!-- Collected -->
                     <div id="collected-subtab" class="sub-tab-content">
                         <div class="table-container">
                             <table>
-                                <thead><tr><th>User & Location</th><th>Date & Time</th><th>Waste Type</th><th>Driver</th><th>Action</th></tr></thead>
+                                <thead>
+                                    <tr>
+                                        <th>User & Location</th>
+                                        <th>Date & Time</th>
+                                        <th>Waste Type</th>
+                                        <th>Driver</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
                                 <tbody>
-                                    <?php if ($collected_result->num_rows > 0): $collected_result->data_seek(0); while($row = $collected_result->fetch_assoc()): ?>
+                                    <?php if ($collected_result->num_rows > 0): ?>
+                                        <?php while($row = $collected_result->fetch_assoc()): ?>
                                         <tr>
-                                            <td data-label="User & Location"><?= htmlspecialchars($row['user_name']) ?><br><small><?= htmlspecialchars($row['area']) ?>, <?= htmlspecialchars($row['city']) ?></small></td>
-                                            <td data-label="Date & Time"><?= htmlspecialchars($row['pickup_date']) ?><br><small><?= htmlspecialchars($row['time_slot']) ?></small></td>
+                                            <td data-label="User & Location">
+                                                <?= htmlspecialchars($row['user_name']) ?><br>
+                                                <small><?= htmlspecialchars($row['area']) ?>, <?= htmlspecialchars($row['city']) ?></small>
+                                            </td>
+                                            <td data-label="Date & Time">
+                                                <?= htmlspecialchars($row['pickup_date']) ?><br>
+                                                <small><?= htmlspecialchars($row['time_slot']) ?></small>
+                                            </td>
                                             <td data-label="Waste Type"><?= htmlspecialchars($row['waste_type']) ?></td>
                                             <td data-label="Driver"><?= htmlspecialchars($row['driver_name']) ?></td>
                                             <td data-label="Action">
                                                 <div class="action-buttons">
-                                                    <form action="update_status.php" method="POST" style="display:inline;"><input type="hidden" name="pickup_id" value="<?= $row['id'] ?>"><input type="hidden" name="new_status" value="Completed"><button type="submit" class="btn-complete">Complete</button></form>
-                                                    <form action="update_status.php" method="POST" style="display:inline;" onsubmit="return handleCollectedCancel(event, this)"><input type="hidden" name="pickup_id" value="<?= $row['id'] ?>"><input type="hidden" name="new_status" value="Cancelled"><button type="submit" class="btn-delete">Cancel</button></form>
+                                                    <form action="update_status.php" method="POST" style="display:inline;">
+                                                        <input type="hidden" name="pickup_id" value="<?= $row['id'] ?>">
+                                                        <input type="hidden" name="new_status" value="Completed">
+                                                        <button type="submit" class="btn-complete">Complete</button>
+                                                    </form>
                                                 </div>
                                             </td>
                                         </tr>
-                                    <?php endwhile; else: ?><tr><td colspan="5">No collected pickups.</td></tr><?php endif; ?>
+                                        <?php endwhile; ?>
+                                    <?php else: ?>
+                                        <tr><td colspan="5">No collected pickups.</td></tr>
+                                    <?php endif; ?>
                                 </tbody>
                             </table>
                         </div>
                     </div>
 
-                    <!-- Completed -->
                     <div id="completed-subtab" class="sub-tab-content">
                         <div class="table-container">
                             <table>
-                                <thead><tr><th>User & Location</th><th>Date & Time</th><th>Waste Type</th><th>Driver</th><th>Status</th></tr></thead>
+                                <thead>
+                                    <tr>
+                                        <th>User & Location</th>
+                                        <th>Date & Time</th>
+                                        <th>Waste Type</th>
+                                        <th>Driver</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
                                 <tbody>
-                                    <?php if ($completed_result->num_rows > 0): $completed_result->data_seek(0); while($row = $completed_result->fetch_assoc()): ?>
+                                    <?php if ($completed_result->num_rows > 0): ?>
+                                        <?php while($row = $completed_result->fetch_assoc()): ?>
                                         <tr>
-                                            <td data-label="User & Location"><?= htmlspecialchars($row['user_name']) ?><br><small><?= htmlspecialchars($row['area']) ?>, <?= htmlspecialchars($row['city']) ?></small></td>
-                                            <td data-label="Date & Time"><?= htmlspecialchars($row['pickup_date']) ?><br><small><?= htmlspecialchars($row['time_slot']) ?></small></td>
+                                            <td data-label="User & Location">
+                                                <?= htmlspecialchars($row['user_name']) ?><br>
+                                                <small><?= htmlspecialchars($row['area']) ?>, <?= htmlspecialchars($row['city']) ?></small>
+                                            </td>
+                                            <td data-label="Date & Time">
+                                                <?= htmlspecialchars($row['pickup_date']) ?><br>
+                                                <small><?= htmlspecialchars($row['time_slot']) ?></small>
+                                            </td>
                                             <td data-label="Waste Type"><?= htmlspecialchars($row['waste_type']) ?></td>
                                             <td data-label="Driver"><?= htmlspecialchars($row['driver_name'] ?? 'N/A') ?></td>
-                                            <td data-label="Status"><span class="status-badge status-<?= strtolower(str_replace(' ', '-', $row['status'])) ?>"><?= htmlspecialchars($row['status']) ?></span></td>
+                                            <td data-label="Status">
+                                                <span class="status-badge status-<?= strtolower(str_replace(' ', '-', $row['status'])) ?>">
+                                                    <?= htmlspecialchars($row['status']) ?>
+                                                </span>
+                                            </td>
                                         </tr>
-                                    <?php endwhile; else: ?><tr><td colspan="5">No completed pickups.</td></tr><?php endif; ?>
+                                        <?php endwhile; ?>
+                                    <?php else: ?>
+                                        <tr><td colspan="5">No completed pickups.</td></tr>
+                                    <?php endif; ?>
                                 </tbody>
                             </table>
                         </div>
                     </div>
                 </section>
             </div>
-
-            <!-- Drivers Tab -->
+            
+                        <!-- Drivers Tab with Sub-tabs -->
             <div id="drivers-tab" class="main-tab-content">
                 <section class="dashboard-section">
                     <h2>Manage Drivers</h2>
+                    
                     <div class="sub-tabs">
                         <button class="sub-tab active" onclick="switchDriverSubTab('add-driver')">Add Driver</button>
                         <button class="sub-tab" onclick="switchDriverSubTab('driver-list')">Driver List</button>
                     </div>
+
+                    <!-- Add Driver Sub-tab -->
                     <div id="add-driver-subtab" class="sub-tab-content active">
                         <form action="admin_dashboard.php" method="post" class="pickup-form" onsubmit="return validateDriverForm(this)">
                             <h3 style="grid-column: 1 / -1;">Create New Driver</h3>
-                            <div class="form-group"><label for="driver_name">Driver Name</label><input type="text" id="driver_name" name="driver_name" required></div>
-                            <div class="form-group"><label for="driver_email">Driver Email</label><input type="email" id="driver_email" name="driver_email" required></div>
-                            <div class="form-group"><label for="driver_password">Password</label><input type="password" id="driver_password" name="driver_password" required></div>
+                            <div class="form-group">
+                                <label for="driver_name">Driver Name</label>
+                                <input type="text" id="driver_name" name="driver_name" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="driver_email">Driver Email</label>
+                                <input type="email" id="driver_email" name="driver_email" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="driver_password">Password</label>
+                                <input type="password" id="driver_password" name="driver_password" required>
+                            </div>
                             <button type="submit" name="create_driver" class="btn btn-primary" style="grid-column: 1 / -1;">Add Driver</button>
                         </form>
                     </div>
+
+                    <!-- Driver List Sub-tab -->
                     <div id="driver-list-subtab" class="sub-tab-content">
                         <div class="table-container">
                             <table>
-                                <thead><tr><th>Name</th><th>Email</th><th>Registration Date</th><th>Action</th></tr></thead>
+                                <thead>
+                                    <tr>
+                                        <th>Name</th>
+                                        <th>Email</th>
+                                        <th>Registration Date</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
                                 <tbody>
-                                    <?php if ($all_drivers_result->num_rows > 0): $all_drivers_result->data_seek(0); while($row = $all_drivers_result->fetch_assoc()): ?>
-                                        <tr><td data-label="Name"><?= htmlspecialchars($row['name']) ?></td><td data-label="Email"><?= htmlspecialchars($row['email']) ?></td><td data-label="Registration Date"><?= date("M j, Y", strtotime($row['created_at'])) ?></td><td data-label="Action"><button class="btn-delete" onclick="confirmDelete('driver', <?= $row['id'] ?>, '<?= htmlspecialchars($row['name']) ?>')">Fire Driver</button></td></tr>
-                                    <?php endwhile; else: ?><tr><td colspan="4">No drivers found.</td></tr><?php endif; ?>
+                                    <?php if ($all_drivers_result->num_rows > 0): ?>
+                                        <?php $all_drivers_result->data_seek(0); ?>
+                                        <?php while($row = $all_drivers_result->fetch_assoc()): ?>
+                                        <tr>
+                                            <td data-label="Name"><?= htmlspecialchars($row['name']) ?></td>
+                                            <td data-label="Email"><?= htmlspecialchars($row['email']) ?></td>
+                                            <td data-label="Registration Date"><?= date("M j, Y", strtotime($row['created_at'])) ?></td>
+                                            <td data-label="Action">
+                                                <button class="btn-delete" onclick="confirmDelete('driver', <?= $row['id'] ?>, '<?= htmlspecialchars($row['name']) ?>')">Fire Driver</button>
+                                            </td>
+                                        </tr>
+                                        <?php endwhile; ?>
+                                    <?php else: ?>
+                                        <tr><td colspan="4">No drivers found.</td></tr>
+                                    <?php endif; ?>
                                 </tbody>
                             </table>
                         </div>
@@ -555,19 +975,42 @@ $all_drivers_result = $conn->query($all_drivers_sql);
                 </section>
             </div>
 
-            <!-- Users Tab -->
+            <!-- Users Tab with Sub-tabs -->
             <div id="users-tab" class="main-tab-content">
                 <section class="dashboard-section">
                     <h2>Manage Users</h2>
-                    <div class="sub-tabs"><button class="sub-tab active" onclick="switchUserSubTab('active-users')">Active Users</button></div>
+                    
+                    <div class="sub-tabs">
+                        <button class="sub-tab active" onclick="switchUserSubTab('active-users')">Active Users</button>
+                    </div>
+
+                    <!-- Active Users Sub-tab -->
                     <div id="active-users-subtab" class="sub-tab-content active">
                         <div class="table-container">
                             <table>
-                                <thead><tr><th>Name</th><th>Email</th><th>Registration Date</th><th>Action</th></tr></thead>
+                                <thead>
+                                    <tr>
+                                        <th>Name</th>
+                                        <th>Email</th>
+                                        <th>Registration Date</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
                                 <tbody>
-                                    <?php if ($users_result->num_rows > 0): while($row = $users_result->fetch_assoc()): ?>
-                                        <tr><td data-label="Name"><?= htmlspecialchars($row['name']) ?></td><td data-label="Email"><?= htmlspecialchars($row['email']) ?></td><td data-label="Registration Date"><?= date("M j, Y", strtotime($row['created_at'])) ?></td><td data-label="Action"><button class="btn-delete" onclick="confirmDelete('user', <?= $row['id'] ?>, '<?= htmlspecialchars($row['name']) ?>')">Delete User</button></td></tr>
-                                    <?php endwhile; else: ?><tr><td colspan="4">No users found.</td></tr><?php endif; ?>
+                                    <?php if ($users_result->num_rows > 0): ?>
+                                        <?php while($row = $users_result->fetch_assoc()): ?>
+                                        <tr>
+                                            <td data-label="Name"><?= htmlspecialchars($row['name']) ?></td>
+                                            <td data-label="Email"><?= htmlspecialchars($row['email']) ?></td>
+                                            <td data-label="Registration Date"><?= date("M j, Y", strtotime($row['created_at'])) ?></td>
+                                            <td data-label="Action">
+                                                <button class="btn-delete" onclick="confirmDelete('user', <?= $row['id'] ?>, '<?= htmlspecialchars($row['name']) ?>')">Delete User</button>
+                                            </td>
+                                        </tr>
+                                        <?php endwhile; ?>
+                                    <?php else: ?>
+                                        <tr><td colspan="4">No users found.</td></tr>
+                                    <?php endif; ?>
                                 </tbody>
                             </table>
                         </div>
@@ -579,9 +1022,6 @@ $all_drivers_result = $conn->query($all_drivers_sql);
 
     <script src="theme.js"></script>
     <script>
-        <?php if ($success_message): ?>showAlert('<?= addslashes($success_message) ?>', 'success');<?php endif; ?>
-        <?php if ($error_message): ?>showAlert('<?= addslashes($error_message) ?>', 'error');<?php endif; ?>
-
         function switchMainTab(tabName) {
             document.querySelectorAll('.main-tab').forEach(tab => tab.classList.remove('active'));
             document.querySelectorAll('.main-tab-content').forEach(content => content.classList.remove('active'));
@@ -596,51 +1036,173 @@ $all_drivers_result = $conn->query($all_drivers_sql);
             event.target.classList.add('active');
             document.getElementById(subTabName + '-subtab').classList.add('active');
         }
+        
+        
+        <?php if (isset($success_message) && $success_message): ?>
+            showAlert('<?= addslashes($success_message) ?>', 'success');
+        <?php endif; ?>
+        
+        <?php if (isset($error_message) && $error_message): ?>
+            showAlert('<?= addslashes($error_message) ?>', 'error');
+        <?php endif; ?>
 
+        // Main tab switching
+        function switchMainTab(tabName) {
+            document.querySelectorAll('.main-tab').forEach(tab => tab.classList.remove('active'));
+            document.querySelectorAll('.main-tab-content').forEach(content => content.classList.remove('active'));
+            
+            event.target.classList.add('active');
+            document.getElementById(tabName + '-tab').classList.add('active');
+        }
+
+        // Sub-tab switching for pickups
+        function switchPickupSubTab(subTabName) {
+            const parent = document.getElementById('pickups-tab');
+            parent.querySelectorAll('.sub-tab').forEach(tab => tab.classList.remove('active'));
+            parent.querySelectorAll('.sub-tab-content').forEach(content => content.classList.remove('active'));
+            
+            event.target.classList.add('active');
+            document.getElementById(subTabName + '-subtab').classList.add('active');
+        }
+
+        // Sub-tab switching for drivers
         function switchDriverSubTab(subTabName) {
             const parent = document.getElementById('drivers-tab');
             parent.querySelectorAll('.sub-tab').forEach(tab => tab.classList.remove('active'));
             parent.querySelectorAll('.sub-tab-content').forEach(content => content.classList.remove('active'));
+            
             event.target.classList.add('active');
             document.getElementById(subTabName + '-subtab').classList.add('active');
         }
 
+        // Sub-tab switching for users
         function switchUserSubTab(subTabName) {
             const parent = document.getElementById('users-tab');
             parent.querySelectorAll('.sub-tab').forEach(tab => tab.classList.remove('active'));
             parent.querySelectorAll('.sub-tab-content').forEach(content => content.classList.remove('active'));
+            
             event.target.classList.add('active');
             document.getElementById(subTabName + '-subtab').classList.add('active');
         }
 
-        function toggleNotifications() { document.getElementById('notificationDropdown').classList.toggle('show'); }
-        function showAllNotifications() { document.getElementById('allNotificationsModal').classList.add('show'); document.getElementById('notificationDropdown').classList.remove('show'); fetchAllNotifications(); }
-        function closeAllNotifications() { document.getElementById('allNotificationsModal').classList.remove('show'); }
-        function markAllRead() { showConfirm('Mark all notifications as read?', () => { window.location.href = 'admin_dashboard.php?mark_all_read=1'; }); }
-        function markAsRead(notifId) { window.location.href = `admin_dashboard.php?mark_read=1&notif_id=${notifId}`; }
-        
-        function fetchAllNotifications() {
-            fetch('get_all_notifications.php').then(r => r.json()).then(data => {
-                const body = document.getElementById('allNotificationsBody');
-                if (data.error || data.length === 0) { body.innerHTML = '<div class="notification-empty">No notifications</div>'; return; }
-                body.innerHTML = data.map(notif => `<div class="notification-item ${!notif.is_read ? 'unread' : ''}" onclick="markAsRead(${notif.id})"><div class="notification-title">${notif.title}</div><div class="notification-message">${notif.message}</div><div class="notification-time">${notif.created_at}</div></div>`).join('');
+        // Notification functions
+        function toggleNotifications() {
+            document.getElementById('notificationDropdown').classList.toggle('show');
+        }
+
+        function showAllNotifications() {
+            document.getElementById('allNotificationsModal').classList.add('show');
+            document.getElementById('notificationDropdown').classList.remove('show');
+            fetchAllNotifications();
+        }
+
+        function closeAllNotifications() {
+            document.getElementById('allNotificationsModal').classList.remove('show');
+        }
+
+        function markAllRead() {
+            showConfirm('Mark all notifications as read?', () => {
+                window.location.href = 'admin_dashboard.php?mark_all_read=1';
             });
         }
 
-        document.addEventListener('click', e => {
+        function markAsRead(notifId) {
+            window.location.href = `admin_dashboard.php?mark_read=1&notif_id=${notifId}`;
+        }
+
+        function fetchAllNotifications() {
+            fetch('get_all_notifications.php')
+                .then(response => response.json())
+                .then(data => {
+                    const body = document.getElementById('allNotificationsBody');
+                    if (data.error) {
+                        body.innerHTML = '<div class="notification-empty">Error loading notifications</div>';
+                        return;
+                    }
+                    if (data.length === 0) {
+                        body.innerHTML = '<div class="notification-empty">No notifications</div>';
+                        return;
+                    }
+                    body.innerHTML = data.map(notif => `
+                        <div class="notification-item ${!notif.is_read ? 'unread' : ''}" onclick="markAsRead(${notif.id})">
+                            <div class="notification-title">${notif.title}</div>
+                            <div class="notification-message">${notif.message}</div>
+                            <div class="notification-time">${notif.created_at}</div>
+                        </div>
+                    `).join('');
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    document.getElementById('allNotificationsBody').innerHTML = '<div class="notification-empty">Error loading notifications</div>';
+                });
+        }
+
+        // Close notification dropdown when clicking outside
+        document.addEventListener('click', function(event) {
             const bell = document.querySelector('.notification-bell');
             const dropdown = document.getElementById('notificationDropdown');
-            if (bell && dropdown && !bell.contains(e.target) && !dropdown.contains(e.target)) dropdown.classList.remove('show');
+            if (bell && dropdown && !bell.contains(event.target) && !dropdown.contains(event.target)) {
+                dropdown.classList.remove('show');
+            }
+        });
+
+        // Close modal when clicking outside
+        document.getElementById('allNotificationsModal')?.addEventListener('click', function(event) {
+            if (event.target === this) {
+                closeAllNotifications();
+            }
         });
 
         function confirmDelete(type, id, name) {
-            const message = type === 'user' ? `Delete user "${name}"?` : `Fire driver "${name}"?`;
-            showConfirm(message, () => { const param = type === 'user' ? 'delete_user' : 'fire_driver'; window.location.href = `admin_dashboard.php?${param}=${id}`; });
+            const message = type === 'user' 
+                ? `Are you sure you want to delete user "${name}"? This action cannot be undone.`
+                : `Are you sure you want to fire driver "${name}"? This action cannot be undone.`;
+            
+            showConfirm(message, () => {
+                const param = type === 'user' ? 'delete_user' : 'fire_driver';
+                window.location.href = `admin_dashboard.php?${param}=${id}`;
+            });
         }
 
-        function handleCollectedCancel(e, form) { e.preventDefault(); showConfirm('Cancel this pickup?', () => form.submit()); return false; }
-        function validateAssign(form) { if (!form.querySelector('select').value) { showAlert('Select a driver', 'warning'); return false; } return true; }
-        function validateDriverForm(form) { if ([...form.querySelectorAll('input')].some(i => !i.value.trim())) { showAlert('All fields required', 'warning'); return false; } return true; }
+        function handleCollectedCancel(event, form) {
+            event.preventDefault();
+            showConfirm('Are you sure you want to cancel this pickup?', () => {
+                form.submit();
+            });
+            return false;
+        }
+
+        function validateAssign(form) {
+            const driver = form.querySelector('select[name="driver_id"]').value;
+            if (!driver) {
+                showAlert('Please select a driver', 'warning');
+                return false;
+            }
+            return true;
+        }
+
+        function validateStatus(form) {
+            const status = form.querySelector('select[name="new_status"]').value;
+            if (!status) {
+                showAlert('Please select a status', 'warning');
+                return false;
+            }
+            return true;
+        }
+
+        function validateDriverForm(form) {
+            const name = form.querySelector('#driver_name').value.trim();
+            const email = form.querySelector('#driver_email').value.trim();
+            const password = form.querySelector('#driver_password').value.trim();
+            
+            if (!name || !email || !password) {
+                showAlert('All fields are required', 'warning');
+                return false;
+            }
+            
+            return true;
+        }
+    
     </script>
 </body>
 </html>

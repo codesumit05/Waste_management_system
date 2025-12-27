@@ -31,6 +31,33 @@ if (isset($_GET['mark_all_read'])) {
     exit();
 }
 
+// Handle Intermediate State: Out for Pickup
+if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['out_for_pickup'])) {
+    $pickup_id = intval($_POST['pickup_id']);
+    
+    $stmt = $conn->prepare("UPDATE pickups SET status = 'Out for Pickup' WHERE id = ? AND driver_id = ?");
+    $stmt->bind_param("ii", $pickup_id, $driver_id);
+    
+    if ($stmt->execute()) {
+        // Fetch details for user notification
+        $details_stmt = $conn->prepare("SELECT user_id, area FROM pickups WHERE id = ?");
+        $details_stmt->bind_param("i", $pickup_id);
+        $details_stmt->execute();
+        $pickup_data = $details_stmt->get_result()->fetch_assoc();
+        $details_stmt->close();
+
+        $user_notif_message = "Your driver is now out for pickup for your waste at {$pickup_data['area']}. Please be ready!";
+        $user_notif = $conn->prepare("INSERT INTO notifications (user_id, title, message, type) VALUES (?, 'Driver Out for Pickup', ?, 'info')");
+        $user_notif->bind_param("is", $pickup_data['user_id'], $user_notif_message);
+        $user_notif->execute();
+        $user_notif->close();
+
+        $message = "Status updated: You are now out for pickup!";
+        $message_type = "success";
+    }
+    $stmt->close();
+}
+
 if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['collect_pickup'])) {
     $pickup_id = intval($_POST['pickup_id']);
     
@@ -86,10 +113,11 @@ $stmt_unread->execute();
 $unread_count = $stmt_unread->get_result()->fetch_assoc()['count'];
 $stmt_unread->close();
 
+// UPDATED QUERY: Include 'Out for Pickup' status in active list
 $assigned_sql = "SELECT p.*, u.name as user_name, u.email as user_email
                 FROM pickups p 
                 JOIN users u ON p.user_id = u.id 
-                WHERE p.driver_id = ? AND p.status = 'Assigned' 
+                WHERE p.driver_id = ? AND p.status IN ('Assigned', 'Out for Pickup') 
                 ORDER BY p.pickup_date ASC";
 $stmt_assigned = $conn->prepare($assigned_sql);
 $stmt_assigned->bind_param("i", $driver_id);
@@ -278,7 +306,6 @@ $history_result = $stmt_history->get_result();
             box-shadow: 0 4px 12px rgba(14, 165, 233, 0.4);
         }
         
-        /* All Notifications Modal */
         .all-notifications-modal {
             display: none;
             position: fixed;
@@ -288,8 +315,7 @@ $history_result = $stmt_history->get_result();
             height: 100%;
             background: rgba(0,0,0,0.8);
             z-index: 10000;
-            align-items: center;
-            justify-content: center;
+            align-items: center; justify-content: center;
         }
         .all-notifications-modal.show {
             display: flex;
@@ -338,6 +364,31 @@ $history_result = $stmt_history->get_result();
             border-color: var(--primary);
             color: var(--primary);
         }
+
+        .btn-out {
+            background: linear-gradient(135deg, var(--secondary), var(--primary));
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .btn-out:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(139, 92, 246, 0.4);
+        }
+        .status-pill {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            margin-bottom: 5px;
+        }
+        .status-pill.assigned { background: rgba(14, 165, 233, 0.2); color: var(--primary); }
+        .status-pill.out { background: rgba(139, 92, 246, 0.2); color: var(--secondary); }
     </style>
 </head>
 <body>
@@ -389,16 +440,13 @@ $history_result = $stmt_history->get_result();
         </nav>
     </header>
 
-    <!-- All Notifications Modal -->
     <div class="all-notifications-modal" id="allNotificationsModal">
         <div class="modal-content">
             <div class="modal-header">
                 <h2>All Notifications</h2>
                 <button class="modal-close" onclick="closeAllNotifications()">&times;</button>
             </div>
-            <div class="modal-body" id="allNotificationsBody">
-                <!-- Will be populated by JavaScript -->
-            </div>
+            <div class="modal-body" id="allNotificationsBody"></div>
         </div>
     </div>
 
@@ -425,6 +473,11 @@ $history_result = $stmt_history->get_result();
                             <?php if ($assigned_result->num_rows > 0): while($row = $assigned_result->fetch_assoc()): ?>
                             <tr>
                                 <td data-label="User Details">
+                                    <?php if($row['status'] == 'Out for Pickup'): ?>
+                                        <span class="status-pill out">OUT FOR PICKUP</span><br>
+                                    <?php else: ?>
+                                        <span class="status-pill assigned">ASSIGNED</span><br>
+                                    <?php endif; ?>
                                     <strong><?= htmlspecialchars($row['user_name']) ?></strong>
                                     <div class="contact-info">
                                         📧 <a href="mailto:<?= htmlspecialchars($row['user_email']) ?>"><?= htmlspecialchars($row['user_email']) ?></a>
@@ -446,7 +499,7 @@ $history_result = $stmt_history->get_result();
                                                 <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/>
                                                 <circle cx="12" cy="10" r="3"/>
                                             </svg>
-                                            View on Map
+                                            View Map
                                         </button>
                                         <button class="directions-btn" onclick="openGoogleMapsDirections(<?= $row['latitude'] ?>, <?= $row['longitude'] ?>)">
                                             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -454,17 +507,26 @@ $history_result = $stmt_history->get_result();
                                                 <path d="M2 17l10 5 10-5"/>
                                                 <path d="M2 12l10 5 10-5"/>
                                             </svg>
-                                            Get Directions
+                                            Directions
                                         </button>
                                     <?php else: ?>
                                         <span style="color: var(--text-secondary);">No location pinned</span>
                                     <?php endif; ?>
                                 </td>
                                 <td data-label="Action">
-                                    <form method="POST" action="driver_dashboard.php" onsubmit="return handleCollect(event, this);">
-                                        <input type="hidden" name="pickup_id" value="<?= $row['id'] ?>">
-                                        <button type="submit" name="collect_pickup" class="btn-collect" style="width: 100%;">Mark as Collected</button>
-                                    </form>
+                                    <div style="display: flex; flex-direction: column; gap: 8px;">
+                                        <?php if($row['status'] == 'Assigned'): ?>
+                                            <form method="POST" action="driver_dashboard.php">
+                                                <input type="hidden" name="pickup_id" value="<?= $row['id'] ?>">
+                                                <button type="submit" name="out_for_pickup" class="btn-out" style="width: 100%;">Mark Out for Pickup</button>
+                                            </form>
+                                        <?php elseif($row['status'] == 'Out for Pickup'): ?>
+                                            <form method="POST" action="driver_dashboard.php" onsubmit="return handleCollect(event, this);">
+                                                <input type="hidden" name="pickup_id" value="<?= $row['id'] ?>">
+                                                <button type="submit" name="collect_pickup" class="btn-collect" style="width: 100%;">Mark as Collected</button>
+                                            </form>
+                                        <?php endif; ?>
+                                    </div>
                                 </td>
                             </tr>
                             <?php endwhile; else: ?>
@@ -509,7 +571,6 @@ $history_result = $stmt_history->get_result();
         </div>
     </main>
 
-    <!-- Location Modal -->
     <div id="locationModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 10000; align-items: center; justify-content: center;">
         <div style="background: var(--bg-secondary); padding: 2rem; border-radius: 24px; max-width: 900px; width: 90%; max-height: 90vh; overflow: auto; border: 2px solid var(--border-color);">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
@@ -528,7 +589,6 @@ $history_result = $stmt_history->get_result();
         let viewMapInstance;
         let viewMarker;
 
-        // Notification Functions
         function toggleNotifications() {
             const dropdown = document.getElementById('notificationDropdown');
             dropdown.classList.toggle('show');
@@ -539,9 +599,9 @@ $history_result = $stmt_history->get_result();
         }
 
         function markAllRead() {
-            if (confirm('Mark all notifications as read?')) {
+            showConfirm('Mark all notifications as read?', () => {
                 window.location.href = 'driver_dashboard.php?mark_all_read=1';
-            }
+            });
         }
 
         function showAllNotifications() {
@@ -581,19 +641,11 @@ $history_result = $stmt_history->get_result();
                 });
         }
 
-        // Close dropdown when clicking outside
         document.addEventListener('click', function(event) {
             const bell = document.querySelector('.notification-bell');
             const dropdown = document.getElementById('notificationDropdown');
             if (bell && dropdown && !bell.contains(event.target) && !dropdown.contains(event.target)) {
                 dropdown.classList.remove('show');
-            }
-        });
-
-        // Close modal when clicking outside
-        document.getElementById('allNotificationsModal')?.addEventListener('click', function(event) {
-            if (event.target === this) {
-                closeAllNotifications();
             }
         });
 

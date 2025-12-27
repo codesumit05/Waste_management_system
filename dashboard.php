@@ -627,9 +627,9 @@ $history_result = $stmt_history->get_result();
         }
 
         function markAllRead() {
-            if (confirm('Mark all notifications as read?')) {
+            showConfirm('Mark all notifications as read?', () => {
                 window.location.href = 'dashboard.php?mark_all_read=1';
-            }
+            });
         }
 
         function showAllNotifications() {
