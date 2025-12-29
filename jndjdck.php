@@ -42,40 +42,7 @@ if (isset($_GET['mark_all_read'])) {
     exit();
 }
 
-// Delete selected notifications
-if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['delete_notifications'])) {
-    if (!empty($_POST['notification_ids']) && is_array($_POST['notification_ids'])) {
-        $ids = array_map('intval', $_POST['notification_ids']);
-        $count = count($ids);
-        $placeholders = implode(',', array_fill(0, $count, '?'));
-        
-        $stmt = $conn->prepare("DELETE FROM notifications WHERE id IN ($placeholders) AND admin_id = ?");
-        
-        $types = str_repeat('i', $count + 1);
-        $params = array_merge($ids, [$admin_id]);
-        
-        $stmt->bind_param($types, ...$params);
-        if ($stmt->execute()) {
-            $_SESSION['success_message'] = $count . " notification(s) deleted successfully!";
-        }
-        $stmt->close();
-    }
-    header("Location: admin_dashboard.php");
-    exit();
-}
 
-// Delete single notification
-if (isset($_GET['delete_notif'])) {
-    $notif_id = intval($_GET['delete_notif']);
-    $stmt = $conn->prepare("DELETE FROM notifications WHERE id = ? AND admin_id = ?");
-    $stmt->bind_param("ii", $notif_id, $admin_id);
-    if ($stmt->execute()) {
-        $_SESSION['success_message'] = "Notification deleted successfully!";
-    }
-    $stmt->close();
-    header("Location: admin_dashboard.php");
-    exit();
-}
 // Handle Create Driver form submission
 if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['create_driver'])) {
     $name = $_POST['driver_name'];
@@ -610,37 +577,32 @@ $fired_drivers_result = $conn->query($fired_drivers_sql);
         .all-notifications-modal.show {
             display: flex;
         }
-.modal-content {
-    background: var(--bg-secondary);
-    border-radius: 24px;
-    max-width: 700px;
-    width: 90%;
-    max-height: 85vh;
-    display: flex;
-    flex-direction: column;
-    box-shadow: 0 25px 60px var(--shadow-color);
-    overflow: hidden;
-}
+        .modal-content {
+            background: var(--bg-secondary);
+            border-radius: 24px;
+            max-width: 700px;
+            width: 90%;
+            max-height: 85vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 25px 60px var(--shadow-color);
+        }
         .modal-header {
             padding: 1.5rem;
             border-bottom: 2px solid var(--border-color);
             display: flex;
             justify-content: space-between;
             align-items: center;
-            flex-shrink: 0;
         }
         .modal-header h2 {
             margin: 0;
             font-size: 1.5rem;
         }
-.modal-body {
-    padding: 0;
-    overflow-y: auto;
-    overflow-x: hidden;
-    flex: 1;
-    min-height: 0;
-    max-height: calc(85vh - 200px); /* Ensure scrollable area */
-}
+        .modal-body {
+            padding: 1rem;
+            overflow-y: auto;
+            flex: 1;
+        }
         .modal-close {
             background: var(--bg-tertiary);
             border: 2px solid var(--border-color);
@@ -659,155 +621,8 @@ $fired_drivers_result = $conn->query($fired_drivers_sql);
             border-color: var(--primary);
             color: var(--primary);
         }
-.notification-actions {
-    display: flex;
-    gap: 0.5rem;
-    padding: 1rem 1.25rem;
-    border-bottom: 1px solid var(--border-color);
-    align-items: center;
-    flex-wrap: wrap;
-    flex-shrink: 0; /* Prevent from shrinking */
-    background: var(--bg-secondary); /* Match modal background */
-}
-
-.notification-checkbox {
-    width: 18px;
-    height: 18px;
-    cursor: pointer;
-    accent-color: var(--primary);
-    display: none; /* Hidden by default */
-}
-
-.notification-checkbox.show {
-    display: block;
-}
-
-.notification-item-wrapper {
-    display: flex;
-    align-items: flex-start;
-    gap: 1rem;
-    padding: 1rem 1.25rem;
-    border-bottom: 1px solid var(--border-color);
-    transition: background 0.2s ease;
-}
-
-.notification-item-wrapper:hover {
-    background: var(--bg-tertiary);
-}
-
-.notification-item-wrapper.unread {
-    background: rgba(14, 165, 233, 0.05);
-}
-
-.notification-content {
-    flex: 1;
-    cursor: pointer;
-}
-
-.notification-delete-btn {
-    background: transparent;
-    border: none;
-    color: var(--text-secondary);
-    cursor: pointer;
-    padding: 0.25rem;
-    transition: all 0.3s ease;
-    font-size: 1.2rem;
-    line-height: 1;
-}
-
-.notification-delete-btn:hover {
-    color: #ef4444;
-    transform: scale(1.1);
-}
-
-.btn-select-mode {
-    background: linear-gradient(135deg, var(--primary), var(--secondary));
-    color: white;
-    padding: 0.5rem 1rem;
-    border: none;
-    border-radius: 8px;
-    cursor: pointer;
-    font-size: 0.8rem;
-    font-weight: 600;
-    transition: all 0.3s ease;
-}
-
-.btn-select-mode:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(14, 165, 233, 0.4);
-}
-
-.btn-cancel-select {
-    background: var(--bg-tertiary);
-    color: var(--text-primary);
-    border: 2px solid var(--border-color);
-    padding: 0.5rem 1rem;
-    border-radius: 8px;
-    cursor: pointer;
-    font-size: 0.8rem;
-    font-weight: 600;
-    transition: all 0.3s ease;
-}
-
-.btn-cancel-select:hover {
-    border-color: var(--primary);
-    color: var(--primary);
-}
-
-.btn-delete-selected {
-    background: linear-gradient(135deg, #ef4444, #dc2626);
-    color: white;
-    padding: 0.5rem 1rem;
-    border: none;
-    border-radius: 8px;
-    cursor: pointer;
-    font-size: 0.8rem;
-    font-weight: 600;
-    transition: all 0.3s ease;
-    display: none;
-}
-
-.btn-delete-selected.show {
-    display: inline-block;
-}
-
-.btn-delete-selected:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(239, 68, 68, 0.4);
-}
-
-.btn-delete-selected:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-}
-
-.select-all-label {
-    display: none;
-    align-items: center;
-    gap: 0.5rem;
-    font-size: 0.875rem;
-    font-weight: 600;
-    color: var(--text-primary);
-    cursor: pointer;
-    user-select: none;
-}
-
-.select-all-label.show {
-    display: flex;
-}
-
-.notification-count {
-    font-size: 0.75rem;
-    color: var(--text-secondary);
-    margin-left: auto;
-}
-
-.selection-mode-active .notification-item-wrapper {
-    cursor: default;
-}
-
-.selection-mode-active .notification-content {
-    cursor: pointer;
+        .search-container {
+    margin-bottom: 1.5rem;
 }
 
 .search-box {
@@ -874,39 +689,30 @@ $fired_drivers_result = $conn->query($fired_drivers_sql);
                             <?php endif; ?>
                         </div>
                         <div class="notification-dropdown" id="notificationDropdown">
-    <div class="notification-header">
-        Notifications
-        <button class="mark-all-read-btn" onclick="markAllRead()">Mark All</button>
-    </div>
-    <div class="notification-body">
-        <?php if ($notifications->num_rows > 0): ?>
-            <?php 
-            $notifications->data_seek(0); // Reset pointer
-            while($notif = $notifications->fetch_assoc()): 
-            ?>
-            <div class="notification-item-wrapper <?= !$notif['is_read'] ? 'unread' : '' ?>">
-                <div class="notification-content" onclick="markAsRead(<?= $notif['id'] ?>)">
-                    <div class="notification-title"><?= htmlspecialchars($notif['title']) ?></div>
-                    <div class="notification-message"><?= htmlspecialchars($notif['message']) ?></div>
-                    <div class="notification-time"><?= date('M j, Y g:i A', strtotime($notif['created_at'])) ?></div>
-                </div>
-                <button class="notification-delete-btn" 
-                        onclick="event.stopPropagation(); deleteNotification(<?= $notif['id'] ?>)"
-                        title="Delete notification">
-                    ×
-                </button>
-            </div>
-            <?php endwhile; ?>
-        <?php else: ?>
-            <div class="notification-empty">No notifications</div>
-        <?php endif; ?>
-    </div>
-    <?php if ($notifications->num_rows > 0): ?>
-    <div class="notification-footer">
-        <div class="view-all-btn" onclick="showAllNotifications()">View All Notifications</div>
-    </div>
-    <?php endif; ?>
-</div>
+                            <div class="notification-header">
+                                Notifications
+                                <button class="mark-all-read-btn" onclick="markAllRead()">Mark All</button>
+                            </div>
+                            <div class="notification-body">
+                                <?php if ($notifications->num_rows > 0): ?>
+                                    <?php while($notif = $notifications->fetch_assoc()): ?>
+                                    <div class="notification-item <?= !$notif['is_read'] ? 'unread' : '' ?>" 
+                                         onclick="markAsRead(<?= $notif['id'] ?>)">
+                                        <div class="notification-title"><?= htmlspecialchars($notif['title']) ?></div>
+                                        <div class="notification-message"><?= htmlspecialchars($notif['message']) ?></div>
+                                        <div class="notification-time"><?= date('M j, Y g:i A', strtotime($notif['created_at'])) ?></div>
+                                    </div>
+                                    <?php endwhile; ?>
+                                <?php else: ?>
+                                    <div class="notification-empty">No notifications</div>
+                                <?php endif; ?>
+                            </div>
+                            <?php if ($notifications->num_rows > 0): ?>
+                            <div class="notification-footer">
+                                <div class="view-all-btn" onclick="showAllNotifications()">View All Notifications</div>
+                            </div>
+                            <?php endif; ?>
+                        </div>
                     </li>
                     <li><a href="logout.php" class="btn btn-secondary">Logout</a></li>
                 </ul>
@@ -915,41 +721,14 @@ $fired_drivers_result = $conn->query($fired_drivers_sql);
     </header>
 
     <div class="all-notifications-modal" id="allNotificationsModal">
-    <div class="modal-content">
-        <div class="modal-header">
-            <h2>All Notifications</h2>
-            <button class="modal-close" onclick="closeAllNotifications()">&times;</button>
-        </div>
-        <form id="deleteNotificationsForm" method="POST" action="admin_dashboard.php">
-            <div class="notification-actions">
-      
-                <button type="button" 
-                        class="btn-select-mode" 
-                        id="selectModeBtn" 
-                        onclick="enableSelectionMode()">
-                    Select Multiple
-                </button>
-                
-                <!-- Selection mode controls (hidden by default) -->
-                <label class="select-all-label" id="selectAllLabel">
-                    <input type="checkbox" 
-                           class="notification-checkbox show" 
-                           id="selectAllNotifications" 
-                           onchange="toggleSelectAll()">
-                    <span>Select All</span>
-                </label>
-                
-                <button type="submit" 
-        class="btn-delete-selected" 
-        id="deleteSelectedBtn" 
-        name="delete_notifications">Delete Selected</button>
-                
-                <span class="notification-count" id="selectedCount"></span>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>All Notifications</h2>
+                <button class="modal-close" onclick="closeAllNotifications()">&times;</button>
             </div>
             <div class="modal-body" id="allNotificationsBody"></div>
-        </form>
+        </div>
     </div>
-</div>
 
     <main class="dashboard-main">
         <div class="container">
@@ -1596,268 +1375,66 @@ function confirmRestore(type, id, name) {
             document.getElementById(subTabName + '-subtab').classList.add('active');
         }
 
-       // Notification functions
-// Enhanced fetchAllNotifications with better error handling
-function fetchAllNotifications() {
-    console.log('Fetching all notifications...');
-    
-    const body = document.getElementById('allNotificationsBody');
-    const actionsDiv = document.querySelector('.notification-actions');
-    
-    // Show loading state
-    body.innerHTML = '<div class="notification-empty">Loading notifications...</div>';
-    
-    fetch('get_all_notifications.php')
-        .then(response => {
-            console.log('Response status:', response.status);
-            console.log('Response ok:', response.ok);
-            
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            return response.text(); // Get as text first to see raw response
-        })
-        .then(text => {
-            console.log('Raw response:', text);
-            
-            // Try to parse as JSON
-            try {
-                return JSON.parse(text);
-            } catch (e) {
-                console.error('JSON parse error:', e);
-                console.error('Response text:', text);
-                throw new Error('Invalid JSON response');
-            }
-        })
-        .then(data => {
-            console.log('Parsed data:', data);
-            
-            // Check for error in response
-            if (data.error) {
-                body.innerHTML = `<div class="notification-empty">Error: ${data.error}</div>`;
-                if (actionsDiv) actionsDiv.style.display = 'none';
-                return;
-            }
-            
-            // Check if empty
-            if (!Array.isArray(data) || data.length === 0) {
-                body.innerHTML = '<div class="notification-empty">No notifications</div>';
-                if (actionsDiv) actionsDiv.style.display = 'none';
-                return;
-            }
-            
-            // Show actions
-            if (actionsDiv) actionsDiv.style.display = 'flex';
-            
-            // Render notifications
-            body.innerHTML = data.map(notif => `
-                <div class="notification-item-wrapper ${!notif.is_read ? 'unread' : ''}">
-                    <input type="checkbox" 
-                           class="notification-checkbox" 
-                           name="notification_ids[]" 
-                           value="${notif.id}"
-                           onclick="event.stopPropagation();" 
-                           onchange="updateDeleteButton()">
-                    <div class="notification-content" onclick="handleNotifClick(event, ${notif.id})">
-                        <div class="notification-title">${escapeHtml(notif.title)}</div>
-                        <div class="notification-message">${escapeHtml(notif.message)}</div>
-                        <div class="notification-time">${escapeHtml(notif.created_at)}</div>
-                    </div>
-                    <button type="button" 
-                            class="notification-delete-btn" 
-                            onclick="event.stopPropagation(); deleteNotification(${notif.id})"
-                            title="Delete notification">
-                        ×
-                    </button>
-                </div>
-            `).join('');
-            
-            // Reset selection mode
-            disableSelectionMode();
-        })
-        .catch(error => {
-            console.error('Fetch error:', error);
-            body.innerHTML = `<div class="notification-empty">Error loading notifications: ${error.message}</div>`;
-            if (actionsDiv) actionsDiv.style.display = 'none';
-        });
-}
-
-// Helper function to escape HTML and prevent XSS
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
-
-// Show all notifications modal
-function showAllNotifications() {
-    const modal = document.getElementById('allNotificationsModal');
-    const dropdown = document.getElementById('notificationDropdown');
-    
-    if (modal) {
-        modal.classList.add('show');
-        fetchAllNotifications();
-    } else {
-        console.error('Modal not found!');
-    }
-    
-    if (dropdown) {
-        dropdown.classList.remove('show');
-    }
-}
-
-// Close modal
-function closeAllNotifications() {
-    const modal = document.getElementById('allNotificationsModal');
-    if (modal) {
-        modal.classList.remove('show');
-    }
-    disableSelectionMode();
-}
-
-// Toggle notifications dropdown
-function toggleNotifications() {
-    const dropdown = document.getElementById('notificationDropdown');
-    if (dropdown) {
-        dropdown.classList.toggle('show');
-    }
-}
-
-// Mark all as read
-function markAllRead() {
-    showConfirm('Mark all notifications as read?', () => {
-        window.location.href = 'admin_dashboard.php?mark_all_read=1';
-    });
-}
-
-// Mark single notification as read
-function markAsRead(notifId) {
-    window.location.href = `admin_dashboard.php?mark_read=1&notif_id=${notifId}`;
-}
-
-// Delete single notification
-function deleteNotification(notifId) {
-    showConfirm('Delete this notification?', () => {
-        window.location.href = `admin_dashboard.php?delete_notif=${notifId}`;
-    });
-}
-
-// Selection mode state
-let selectionModeActive = false;
-
-// Enable selection mode
-function enableSelectionMode() {
-    selectionModeActive = true;
-    
-    const checkboxes = document.querySelectorAll('.modal-body .notification-checkbox');
-    const selectModeBtn = document.getElementById('selectModeBtn');
-    const selectAllLabel = document.getElementById('selectAllLabel');
-    const cancelBtn = document.getElementById('cancelSelectBtn');
-    const modalBody = document.getElementById('allNotificationsBody');
-    
-    checkboxes.forEach(cb => cb.classList.add('show'));
-    
-    if (selectModeBtn) selectModeBtn.style.display = 'none';
-    if (selectAllLabel) selectAllLabel.classList.add('show');
-    if (cancelBtn) cancelBtn.style.display = 'inline-block';
-    if (modalBody) modalBody.classList.add('selection-mode-active');
-    
-    updateDeleteButton();
-}
-
-// Disable selection mode
-function disableSelectionMode() {
-    selectionModeActive = false;
-    
-    const checkboxes = document.querySelectorAll('.modal-body .notification-checkbox');
-    const selectAll = document.getElementById('selectAllNotifications');
-    const selectModeBtn = document.getElementById('selectModeBtn');
-    const selectAllLabel = document.getElementById('selectAllLabel');
-    const cancelBtn = document.getElementById('cancelSelectBtn');
-    const deleteBtn = document.getElementById('deleteSelectedBtn');
-    const selectedCount = document.getElementById('selectedCount');
-    const modalBody = document.getElementById('allNotificationsBody');
-    
-    checkboxes.forEach(cb => {
-        cb.classList.remove('show');
-        cb.checked = false;
-    });
-    
-    if (selectAll) selectAll.checked = false;
-    if (selectModeBtn) selectModeBtn.style.display = 'inline-block';
-    if (selectAllLabel) selectAllLabel.classList.remove('show');
-    if (cancelBtn) cancelBtn.style.display = 'none';
-    if (deleteBtn) deleteBtn.classList.remove('show');
-    if (selectedCount) selectedCount.textContent = '';
-    if (modalBody) modalBody.classList.remove('selection-mode-active');
-}
-
-// Toggle select all
-function toggleSelectAll() {
-    const selectAll = document.getElementById('selectAllNotifications');
-    const checkboxes = document.querySelectorAll('.modal-body .notification-checkbox');
-    
-    if (selectAll && checkboxes) {
-        checkboxes.forEach(cb => cb.checked = selectAll.checked);
-        updateDeleteButton();
-    }
-}
-
-// Update delete button state
-function updateDeleteButton() {
-    if (!selectionModeActive) return;
-    
-    const checkboxes = document.querySelectorAll('.modal-body .notification-checkbox');
-    const checkedBoxes = document.querySelectorAll('.modal-body .notification-checkbox:checked');
-    const deleteBtn = document.getElementById('deleteSelectedBtn');
-    const selectedCount = document.getElementById('selectedCount');
-    const selectAll = document.getElementById('selectAllNotifications');
-    
-    if (checkedBoxes.length > 0) {
-        if (deleteBtn) deleteBtn.classList.add('show');
-        if (selectedCount) selectedCount.textContent = `${checkedBoxes.length} selected`;
-    } else {
-        if (deleteBtn) deleteBtn.classList.remove('show');
-        if (selectedCount) selectedCount.textContent = '';
-    }
-    
-    if (selectAll && checkboxes.length > 0) {
-        selectAll.checked = checkedBoxes.length === checkboxes.length;
-        selectAll.indeterminate = checkedBoxes.length > 0 && checkedBoxes.length < checkboxes.length;
-    }
-}
-
-// Handle notification click
-function handleNotifClick(event, notifId) {
-    if (selectionModeActive) {
-        const wrapper = event.currentTarget.closest('.notification-item-wrapper');
-        const checkbox = wrapper.querySelector('.notification-checkbox');
-        if (checkbox) {
-            checkbox.checked = !checkbox.checked;
-            updateDeleteButton();
+        // Notification functions
+        function toggleNotifications() {
+            document.getElementById('notificationDropdown').classList.toggle('show');
         }
-    } else {
-        markAsRead(notifId);
-    }
-}
 
-document.addEventListener('click', function(event) {
-    const dropdown = document.getElementById('notificationDropdown');
-    const bell = document.querySelector('.notification-bell');
-    
-    if (dropdown && bell && !bell.contains(event.target) && !dropdown.contains(event.target)) {
-        dropdown.classList.remove('show');
-    }
-});
+        function showAllNotifications() {
+            document.getElementById('allNotificationsModal').classList.add('show');
+            document.getElementById('notificationDropdown').classList.remove('show');
+            fetchAllNotifications();
+        }
 
-// Close modal when clicking outside
-document.getElementById('allNotificationsModal')?.addEventListener('click', function(event) {
-    if (event.target === this) {
-        closeAllNotifications();
-    }
-});
+        function closeAllNotifications() {
+            document.getElementById('allNotificationsModal').classList.remove('show');
+        }
 
-console.log('Notification functions loaded successfully');
+        function markAllRead() {
+            showConfirm('Mark all notifications as read?', () => {
+                window.location.href = 'admin_dashboard.php?mark_all_read=1';
+            });
+        }
+
+        function markAsRead(notifId) {
+            window.location.href = `admin_dashboard.php?mark_read=1&notif_id=${notifId}`;
+        }
+
+        function fetchAllNotifications() {
+            fetch('get_all_notifications.php')
+                .then(response => response.json())
+                .then(data => {
+                    const body = document.getElementById('allNotificationsBody');
+                    if (data.error) {
+                        body.innerHTML = '<div class="notification-empty">Error loading notifications</div>';
+                        return;
+                    }
+                    if (data.length === 0) {
+                        body.innerHTML = '<div class="notification-empty">No notifications</div>';
+                        return;
+                    }
+                    body.innerHTML = data.map(notif => `
+                        <div class="notification-item ${!notif.is_read ? 'unread' : ''}" onclick="markAsRead(${notif.id})">
+                            <div class="notification-title">${notif.title}</div>
+                            <div class="notification-message">${notif.message}</div>
+                            <div class="notification-time">${notif.created_at}</div>
+                        </div>
+                    `).join('');
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    document.getElementById('allNotificationsBody').innerHTML = '<div class="notification-empty">Error loading notifications</div>';
+                });
+        }
+
+        // Close notification dropdown when clicking outside
+        document.addEventListener('click', function(event) {
+            const bell = document.querySelector('.notification-bell');
+            const dropdown = document.getElementById('notificationDropdown');
+            if (bell && dropdown && !bell.contains(event.target) && !dropdown.contains(event.target)) {
+                dropdown.classList.remove('show');
+            }
+        });
 
         // Close modal when clicking outside
         document.getElementById('allNotificationsModal')?.addEventListener('click', function(event) {
@@ -1915,19 +1492,7 @@ console.log('Notification functions loaded successfully');
             
             return true;
         }
-    function handleNotifClick(event, notifId) {
-    if (selectionModeActive) {
-        // Toggle the checkbox for this item instead of navigating
-        const wrapper = event.currentTarget.closest('.notification-item-wrapper');
-        const checkbox = wrapper.querySelector('.notification-checkbox');
-        checkbox.checked = !checkbox.checked;
-        updateDeleteButton();
-    } else {
-        // Normal behavior: navigate to mark as read
-        markAsRead(notifId);
-    }
-}
-
+    
     </script>
 </body>
 </html>

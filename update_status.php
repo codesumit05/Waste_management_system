@@ -88,3 +88,8 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['pickup_id']) && isset(
 header("Location: admin_dashboard.php");
 exit();
 ?>
+
+
+<!-- showConfirm('Are you sure you want to cancel this pickup request?', () => {
+                window.location.href = 'driver_dashboard.php?mark_all_read=1';
+            }); -->
