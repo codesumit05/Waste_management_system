@@ -96,19 +96,60 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['out_for_pickup'])) {
     exit();
 }
 
+// Handle waste collection with verification code
 if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['collect_pickup'])) {
     $pickup_id = intval($_POST['pickup_id']);
+    $entered_code = trim($_POST['verification_code']);
     
-    $details_stmt = $conn->prepare("SELECT p.*, u.name as user_name, u.id as user_id FROM pickups p JOIN users u ON p.user_id = u.id WHERE p.id = ? AND p.driver_id = ?");
+    // Validate input first
+    if (empty($entered_code)) {
+        $_SESSION['error_message'] = "Error: Verification code is required!";
+        header("Location: driver_dashboard.php");
+        exit();
+    }
+    
+    if (!preg_match('/^\d{4}$/', $entered_code)) {
+        $_SESSION['error_message'] = "Error: Verification code must be exactly 4 digits!";
+        header("Location: driver_dashboard.php");
+        exit();
+    }
+    
+    // Fetch pickup details INCLUDING verification_code
+    $details_stmt = $conn->prepare("SELECT p.*, u.name as user_name, u.id as user_id, p.verification_code 
+                                     FROM pickups p 
+                                     JOIN users u ON p.user_id = u.id 
+                                     WHERE p.id = ? AND p.driver_id = ?");
     $details_stmt->bind_param("ii", $pickup_id, $driver_id);
     $details_stmt->execute();
     $pickup_data = $details_stmt->get_result()->fetch_assoc();
     $details_stmt->close();
     
+    if (!$pickup_data) {
+        $_SESSION['error_message'] = "Error: Pickup not found or not assigned to you.";
+        header("Location: driver_dashboard.php");
+        exit();
+    }
+    
+    // Check if verification code exists in database
+    if (empty($pickup_data['verification_code'])) {
+        $_SESSION['error_message'] = "Error: No verification code found for this pickup!";
+        header("Location: driver_dashboard.php");
+        exit();
+    }
+    
+    // Verify the code (strict comparison)
+    if ($entered_code !== $pickup_data['verification_code']) {
+        $_SESSION['error_message'] = "Error: Incorrect verification code! You entered: {$entered_code}. Please verify with the customer.";
+        header("Location: driver_dashboard.php");
+        exit();
+    }
+    
+    // Code is correct, proceed with collection
     $stmt = $conn->prepare("UPDATE pickups SET status = 'Collected by Driver' WHERE id = ? AND driver_id = ?");
     $stmt->bind_param("ii", $pickup_id, $driver_id);
     
-    if ($stmt->execute() && $pickup_data) {
+    if ($stmt->execute()) {
+        // Send notifications
         $user_notif_message = "Your waste from {$pickup_data['area']} has been collected by the driver.";
         $user_notif = $conn->prepare("INSERT INTO notifications (user_id, title, message, type) VALUES (?, 'Waste Collected', ?, 'success')");
         $user_notif->bind_param("is", $pickup_data['user_id'], $user_notif_message);
@@ -121,19 +162,18 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['collect_pickup'])) {
         $driver_notif->execute();
         $driver_notif->close();
         
-        $admin_notif_message = "Pickup from {$pickup_data['user_name']} at {$pickup_data['area']} has been collected.";
-        $admin_notif = $conn->prepare("INSERT INTO notifications (admin_id, title, message, type) SELECT id, 'Pickup Collected', ?, 'info' FROM users WHERE is_admin = TRUE LIMIT 1");
+        $admin_notif_message = "Pickup from {$pickup_data['user_name']} at {$pickup_data['area']} has been collected and verified.";
+        $admin_notif = $conn->prepare("INSERT INTO notifications (admin_id, title, message, type) SELECT id, 'Pickup Collected & Verified', ?, 'info' FROM users WHERE is_admin = TRUE LIMIT 1");
         $admin_notif->bind_param("s", $admin_notif_message);
         $admin_notif->execute();
         $admin_notif->close();
         
-        $_SESSION['success_message'] = "Pickup successfully marked as collected!";
+        $_SESSION['success_message'] = "✅ Pickup successfully collected and verified with code {$entered_code}!";
     } else {
         $_SESSION['error_message'] = "Error: Database update failed.";
     }
     $stmt->close();
     
-    // Redirect to prevent resubmission
     header("Location: driver_dashboard.php");
     exit();
 }
@@ -165,8 +205,9 @@ $stmt_unread->execute();
 $unread_count = $stmt_unread->get_result()->fetch_assoc()['count'];
 $stmt_unread->close();
 
-// UPDATED QUERY: Include 'Out for Pickup' status in active list
-$assigned_sql = "SELECT p.*, u.name as user_name, u.email as user_email
+// UPDATED QUERY: Include verification_code
+
+$assigned_sql = "SELECT p.*, u.name as user_name, u.email as user_email, p.verification_code
                 FROM pickups p 
                 JOIN users u ON p.user_id = u.id 
                 WHERE p.driver_id = ? AND p.status IN ('Assigned', 'Out for Pickup') 
@@ -180,7 +221,8 @@ $assigned_result = $stmt_assigned->get_result();
 $show_all_history = isset($_GET['show_all_history']) ? true : false;
 $history_limit = $show_all_history ? "" : "LIMIT 3";
 
-$history_sql = "SELECT p.*, u.name as user_name 
+// UPDATED History Query
+$history_sql = "SELECT p.*, u.name as user_name, p.latitude, p.longitude 
                 FROM pickups p 
                 JOIN users u ON p.user_id = u.id 
                 WHERE p.driver_id = ? AND p.status IN ('Completed', 'Cancelled', 'Collected by Driver') 
@@ -615,6 +657,45 @@ if (!$show_all_history) {
         }
         .status-pill.assigned { background: rgba(14, 165, 233, 0.2); color: var(--primary); }
         .status-pill.out { background: rgba(139, 92, 246, 0.2); color: var(--secondary); }
+/* Container for the 4-digit input */
+.otp-wrapper {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+    margin: 15px 0;
+}
+
+/* Individual Digit Boxes */
+.otp-input {
+    width: 50px;
+    height: 60px;
+    border: 2px solid var(--border-color);
+    border-radius: 12px;
+    background: var(--bg-tertiary);
+    color: var(--primary);
+    text-align: center;
+    font-size: 1.8rem;
+    font-weight: 800;
+    font-family: 'Courier New', monospace;
+    transition: all 0.3s ease;
+}
+
+.otp-input:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 15px rgba(14, 165, 233, 0.3);
+    background: var(--bg-secondary);
+}
+
+/* Label Styling */
+.verif-instruction {
+    display: block;
+    text-align: center;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+    font-weight: 600;
+}
     </style>
 </head>
 <body>
@@ -710,6 +791,7 @@ if (!$show_all_history) {
         class="btn-delete-selected" 
         id="deleteSelectedBtn"
         name="delete_notifications"
+        onclick ="confirmDeleteSelected(event)"
         >Delete Selected</button>
                 
                 <span class="notification-count" id="selectedCount"></span>
@@ -789,12 +871,31 @@ if (!$show_all_history) {
                                                 <input type="hidden" name="pickup_id" value="<?= $row['id'] ?>">
                                                 <button type="submit" name="out_for_pickup" class="btn-out" style="width: 100%;">Mark Out for Pickup</button>
                                             </form>
-                                        <?php elseif($row['status'] == 'Out for Pickup'): ?>
-                                            <form method="POST" action="driver_dashboard.php" onsubmit="return handleCollect(event, this);">
-                                                <input type="hidden" name="pickup_id" value="<?= $row['id'] ?>">
-                                                <button type="submit" name="collect_pickup" class="btn-collect" style="width: 100%;">Mark as Collected</button>
-                                            </form>
-                                        <?php endif; ?>
+<?php elseif($row['status'] == 'Out for Pickup'): ?>
+    <div style="margin-bottom: 8px;">
+        <form method="POST" action="driver_dashboard.php" id="collectForm_<?= $row['id'] ?>">
+    <input type="hidden" name="pickup_id" value="<?= $row['id'] ?>">
+    <input type="hidden" name="collect_pickup" value="1">
+    <input type="hidden" name="verification_code" id="final_code_<?= $row['id'] ?>">
+    
+    <span class="verif-instruction">Enter Customer Verification Code</span>
+    
+    <div class="otp-wrapper" data-pickup-id="<?= $row['id'] ?>">
+        <input type="text" class="otp-input" maxlength="1" inputmode="numeric" onkeyup="moveFocus(this)" onkeydown="handleBackspace(event, this)">
+        <input type="text" class="otp-input" maxlength="1" inputmode="numeric" onkeyup="moveFocus(this)" onkeydown="handleBackspace(event, this)">
+        <input type="text" class="otp-input" maxlength="1" inputmode="numeric" onkeyup="moveFocus(this)" onkeydown="handleBackspace(event, this)">
+        <input type="text" class="otp-input" maxlength="1" inputmode="numeric" onkeyup="moveFocus(this)" onkeydown="handleBackspace(event, this)">
+    </div>
+
+    <button type="button" 
+            onclick="submitVerifiedCollection(<?= $row['id'] ?>)" 
+            class="btn-collect" 
+            style="width: 100%;">
+        Verify & Collect
+    </button>
+</form>
+    </div>
+<?php endif; ?>
                                     </div>
                                 </td>
                             </tr>
@@ -833,7 +934,36 @@ if (!$show_all_history) {
                             <?php if ($history_result->num_rows > 0): while($row = $history_result->fetch_assoc()): ?>
                             <tr>
                                 <td data-label="User"><?= htmlspecialchars($row['user_name']) ?></td>
-                                <td data-label="Location"><strong><?= htmlspecialchars($row['area']) ?></strong><br><small><?= htmlspecialchars($row['city']) ?></small></td>
+                                <td data-label="Location">
+    <div style="display: flex; justify-content: space-between; align-items: center; gap: 15px;">
+        <div>
+            <strong><?= htmlspecialchars($row['area']) ?></strong><br>
+            <small><?= htmlspecialchars($row['city']) ?></small>
+        </div>
+        
+        <?php if ($row['latitude'] && $row['longitude']): ?>
+            <button onclick="showLocationModal(<?= $row['latitude'] ?>, <?= $row['longitude'] ?>, '<?= htmlspecialchars($row['user_name']) ?>', '<?= htmlspecialchars($row['area']) ?>')" 
+                    style="background: var(--bg-tertiary); 
+                           border: 2px solid var(--primary); 
+                           border-radius: 12px; 
+                           padding: 8px 12px; 
+                           cursor: pointer; 
+                           display: flex; 
+                           flex-direction: column; 
+                           align-items: center; 
+                           min-width: 70px;
+                           position:relative;
+                           right:25%;
+                           transition: all 0.3s ease;
+                           box-shadow: 0 4px 10px rgba(14, 165, 233, 0.2);">
+                <span style="font-size: 1.5rem; margin-bottom: 2px;">🗺️</span>
+                <span style="font-size: 0.7rem; color: var(--primary); font-weight: 800; letter-spacing: 1px;">VIEW MAP</span>
+            </button>
+        <?php else: ?>
+            <span style="font-size: 0.7rem; color: var(--text-secondary); font-style: italic;">No Location</span>
+        <?php endif; ?>
+    </div>
+</td>
                                 <td data-label="Pickup Date"><?= htmlspecialchars($row['pickup_date']) ?></td>
                                 <td data-label="Final Status">
                                     <span class="status-badge status-<?= strtolower(str_replace(' ', '-', $row['status'])) ?>">
@@ -864,375 +994,394 @@ if (!$show_all_history) {
         </div>
     </div>
 
-    <script src="theme.js"></script>
-    <script>
-        let viewMapInstance;
-        let viewMarker;
+ <script src="theme.js"></script>
+<script>
+    let viewMapInstance;
+    let viewMarker;
 
-        function fetchAllNotifications() {
-    console.log('Fetching all notifications...');
-    
-    const body = document.getElementById('allNotificationsBody');
-    const actionsDiv = document.querySelector('.notification-actions');
-    
-    // Show loading state
-    body.innerHTML = '<div class="notification-empty">Loading notifications...</div>';
-    
-    fetch('get_all_notifications.php')
-        .then(response => {
-            console.log('Response status:', response.status);
-            console.log('Response ok:', response.ok);
-            
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            return response.text(); // Get as text first to see raw response
-        })
-        .then(text => {
-            console.log('Raw response:', text);
-            
-            // Try to parse as JSON
-            try {
-                return JSON.parse(text);
-            } catch (e) {
-                console.error('JSON parse error:', e);
-                console.error('Response text:', text);
-                throw new Error('Invalid JSON response');
-            }
-        })
-        .then(data => {
-            console.log('Parsed data:', data);
-            
-            // Check for error in response
-            if (data.error) {
-                body.innerHTML = `<div class="notification-empty">Error: ${data.error}</div>`;
-                if (actionsDiv) actionsDiv.style.display = 'none';
-                return;
-            }
-            
-            // Check if empty
-            if (!Array.isArray(data) || data.length === 0) {
-                body.innerHTML = '<div class="notification-empty">No notifications</div>';
-                if (actionsDiv) actionsDiv.style.display = 'none';
-                return;
-            }
-            
-            // Show actions
-            if (actionsDiv) actionsDiv.style.display = 'flex';
-            
-            // Render notifications
-            body.innerHTML = data.map(notif => `
-                <div class="notification-item-wrapper ${!notif.is_read ? 'unread' : ''}">
-                    <input type="checkbox" 
-                           class="notification-checkbox" 
-                           name="notification_ids[]" 
-                           value="${notif.id}"
-                           onclick="event.stopPropagation();" 
-                           onchange="updateDeleteButton()">
-                    <div class="notification-content" onclick="handleNotifClick(event, ${notif.id})">
-                        <div class="notification-title">${escapeHtml(notif.title)}</div>
-                        <div class="notification-message">${escapeHtml(notif.message)}</div>
-                        <div class="notification-time">${escapeHtml(notif.created_at)}</div>
-                    </div>
-                    <button type="button" 
-                            class="notification-delete-btn" 
-                            onclick="event.stopPropagation(); deleteNotification(${notif.id})"
-                            title="Delete notification">
-                        ×
-                    </button>
-                </div>
-            `).join('');
-            
-            // Reset selection mode
-            disableSelectionMode();
-        })
-        .catch(error => {
-            console.error('Fetch error:', error);
-            body.innerHTML = `<div class="notification-empty">Error loading notifications: ${error.message}</div>`;
-            if (actionsDiv) actionsDiv.style.display = 'none';
-        });
-}
-
-// Helper function to escape HTML and prevent XSS
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
-
-// Show all notifications modal
-function showAllNotifications() {
-    const modal = document.getElementById('allNotificationsModal');
-    const dropdown = document.getElementById('notificationDropdown');
-    
-    if (modal) {
-        modal.classList.add('show');
-        fetchAllNotifications();
-    } else {
-        console.error('Modal not found!');
-    }
-    
-    if (dropdown) {
-        dropdown.classList.remove('show');
-    }
-}
-
-// Close modal
-function closeAllNotifications() {
-    const modal = document.getElementById('allNotificationsModal');
-    if (modal) {
-        modal.classList.remove('show');
-    }
-    disableSelectionMode();
-}
-
-// Toggle notifications dropdown
-function toggleNotifications() {
-    const dropdown = document.getElementById('notificationDropdown');
-    if (dropdown) {
-        dropdown.classList.toggle('show');
-    }
-}
-
-// Mark all as read
-function markAllRead() {
-    showConfirm('Mark all notifications as read?', () => {
-        window.location.href = 'driver_dashboard.php?mark_all_read=1';
+    // Wait for theme.js to load before showing alerts
+    window.addEventListener('DOMContentLoaded', function() {
+        <?php if($message): ?>
+            showAlert("<?= addslashes($message) ?>", "<?= $message_type ?>");
+        <?php endif; ?>
     });
-}
 
-// Mark single notification as read
-function markAsRead(notifId) {
-    window.location.href = `driver_dashboard.php?mark_read=1&notif_id=${notifId}`;
-}
-
-// Delete single notification
-function deleteNotification(notifId) {
-    showConfirm('Delete this notification?', () => {
-        window.location.href = `driver_dashboard.php?delete_notif=${notifId}`;
-    });
-}
-
-// Selection mode state
-let selectionModeActive = false;
-
-// Enable selection mode
-function enableSelectionMode() {
-    selectionModeActive = true;
-    
-    const checkboxes = document.querySelectorAll('.modal-body .notification-checkbox');
-    const selectModeBtn = document.getElementById('selectModeBtn');
-    const selectAllLabel = document.getElementById('selectAllLabel');
-    const cancelBtn = document.getElementById('cancelSelectBtn');
-    const modalBody = document.getElementById('allNotificationsBody');
-    
-    checkboxes.forEach(cb => cb.classList.add('show'));
-    
-    if (selectModeBtn) selectModeBtn.style.display = 'none';
-    if (selectAllLabel) selectAllLabel.classList.add('show');
-    if (cancelBtn) cancelBtn.style.display = 'inline-block';
-    if (modalBody) modalBody.classList.add('selection-mode-active');
-    
-    updateDeleteButton();
-}
-
-// Disable selection mode
-function disableSelectionMode() {
-    selectionModeActive = false;
-    
-    const checkboxes = document.querySelectorAll('.modal-body .notification-checkbox');
-    const selectAll = document.getElementById('selectAllNotifications');
-    const selectModeBtn = document.getElementById('selectModeBtn');
-    const selectAllLabel = document.getElementById('selectAllLabel');
-    const cancelBtn = document.getElementById('cancelSelectBtn');
-    const deleteBtn = document.getElementById('deleteSelectedBtn');
-    const selectedCount = document.getElementById('selectedCount');
-    const modalBody = document.getElementById('allNotificationsBody');
-    
-    checkboxes.forEach(cb => {
-        cb.classList.remove('show');
-        cb.checked = false;
-    });
-    
-    if (selectAll) selectAll.checked = false;
-    if (selectModeBtn) selectModeBtn.style.display = 'inline-block';
-    if (selectAllLabel) selectAllLabel.classList.remove('show');
-    if (cancelBtn) cancelBtn.style.display = 'none';
-    if (deleteBtn) deleteBtn.classList.remove('show');
-    if (selectedCount) selectedCount.textContent = '';
-    if (modalBody) modalBody.classList.remove('selection-mode-active');
-}
-
-// Toggle select all
-function toggleSelectAll() {
-    const selectAll = document.getElementById('selectAllNotifications');
-    const checkboxes = document.querySelectorAll('.modal-body .notification-checkbox');
-    
-    if (selectAll && checkboxes) {
-        checkboxes.forEach(cb => cb.checked = selectAll.checked);
-        updateDeleteButton();
-    }
-}
-
-// Update delete button state
-function updateDeleteButton() {
-    if (!selectionModeActive) return;
-    
-    const checkboxes = document.querySelectorAll('.modal-body .notification-checkbox');
-    const checkedBoxes = document.querySelectorAll('.modal-body .notification-checkbox:checked');
-    const deleteBtn = document.getElementById('deleteSelectedBtn');
-    const selectedCount = document.getElementById('selectedCount');
-    const selectAll = document.getElementById('selectAllNotifications');
-    
-    if (checkedBoxes.length > 0) {
-        if (deleteBtn) deleteBtn.classList.add('show');
-        if (selectedCount) selectedCount.textContent = `${checkedBoxes.length} selected`;
-    } else {
-        if (deleteBtn) deleteBtn.classList.remove('show');
-        if (selectedCount) selectedCount.textContent = '';
-    }
-    
-    if (selectAll && checkboxes.length > 0) {
-        selectAll.checked = checkedBoxes.length === checkboxes.length;
-        selectAll.indeterminate = checkedBoxes.length > 0 && checkedBoxes.length < checkboxes.length;
-    }
-}
-
-// Handle notification click
-function handleNotifClick(event, notifId) {
-    if (selectionModeActive) {
-        const wrapper = event.currentTarget.closest('.notification-item-wrapper');
-        const checkbox = wrapper.querySelector('.notification-checkbox');
-        if (checkbox) {
-            checkbox.checked = !checkbox.checked;
-            updateDeleteButton();
-        }
-    } else {
-        markAsRead(notifId);
-    }
-}
-
-
-// Updated handler for the Delete Selected button
-
-
-document.addEventListener('click', function(event) {
-    const dropdown = document.getElementById('notificationDropdown');
-    const bell = document.querySelector('.notification-bell');
-    
-    if (dropdown && bell && !bell.contains(event.target) && !dropdown.contains(event.target)) {
-        dropdown.classList.remove('show');
-    }
-});
-
-// Close modal when clicking outside
-document.getElementById('allNotificationsModal')?.addEventListener('click', function(event) {
-    if (event.target === this) {
-        closeAllNotifications();
-    }
-});
-
-console.log('Notification functions loaded successfully');
-
-        // Close modal when clicking outside
-        document.getElementById('allNotificationsModal')?.addEventListener('click', function(event) {
-            if (event.target === this) {
-                closeAllNotifications();
-            }
-        });
-
-        function confirmDelete(type, id, name) {
-            const message = type === 'user' 
-                ? `Are you sure you want to delete user "${name}"? This action cannot be undone.`
-                : `Are you sure you want to fire driver "${name}"? This action cannot be undone.`;
-            
-            showConfirm(message, () => {
-                const param = type === 'user' ? 'delete_user' : 'fire_driver';
-                window.location.href = `driver_dashboard.php?${param}=${id}`;
-            });
-        }
-
-        function handleCollectedCancel(event, form) {
-
-            event.preventDefault();
-            showConfirm('Are you sure you want to cancel this pickup?', () => {
-                form.submit();
-            });
-            return false;
-        }
-
-            function handleNotifClick(event, notifId) {
-    if (selectionModeActive) {
-        // Toggle the checkbox for this item instead of navigating
-        const wrapper = event.currentTarget.closest('.notification-item-wrapper');
-        const checkbox = wrapper.querySelector('.notification-checkbox');
-        checkbox.checked = !checkbox.checked;
-        updateDeleteButton();
-    } else {
-        // Normal behavior: navigate to mark as read
-        markAsRead(notifId);
-    }
-}
-
-        function showLocationModal(lat, lng, userName, address) {
-            document.getElementById('locationModal').style.display = 'flex';
-            document.getElementById('modalTitle').textContent = `Pickup Location: ${userName}`;
-            document.getElementById('modalSubtitle').textContent = `📍 ${address}`;
-            
-            setTimeout(() => {
-                if (!viewMapInstance) {
-                    viewMapInstance = L.map('viewMap').setView([lat, lng], 16);
-                    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                        attribution: '© OpenStreetMap contributors',
-                        maxZoom: 19
-                    }).addTo(viewMapInstance);
-                } else {
-                    viewMapInstance.setView([lat, lng], 16);
-                    if (viewMarker) {
-                        viewMapInstance.removeLayer(viewMarker);
-                    }
+    function fetchAllNotifications() {
+        console.log('Fetching all notifications...');
+        
+        const body = document.getElementById('allNotificationsBody');
+        const actionsDiv = document.querySelector('.notification-actions');
+        
+        body.innerHTML = '<div class="notification-empty">Loading notifications...</div>';
+        
+        fetch('get_all_notifications.php')
+            .then(response => {
+                console.log('Response status:', response.status);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return response.text();
+            })
+            .then(text => {
+                console.log('Raw response:', text);
+                
+                try {
+                    return JSON.parse(text);
+                } catch (e) {
+                    console.error('JSON parse error:', e);
+                    throw new Error('Invalid JSON response');
+                }
+            })
+            .then(data => {
+                console.log('Parsed data:', data);
+                
+                if (data.error) {
+                    body.innerHTML = `<div class="notification-empty">Error: ${data.error}</div>`;
+                    if (actionsDiv) actionsDiv.style.display = 'none';
+                    return;
                 }
                 
-                viewMarker = L.marker([lat, lng]).addTo(viewMapInstance)
-                    .bindPopup(`<b>${userName}</b><br>${address}`)
-                    .openPopup();
+                if (!Array.isArray(data) || data.length === 0) {
+                    body.innerHTML = '<div class="notification-empty">No notifications</div>';
+                    if (actionsDiv) actionsDiv.style.display = 'none';
+                    return;
+                }
                 
-                setTimeout(() => viewMapInstance.invalidateSize(), 100);
-            }, 100);
-        }
-
-        function closeLocationModal() {
-            document.getElementById('locationModal').style.display = 'none';
-        }
-
-        function openGoogleMapsDirections(lat, lng) {
-            const url = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`;
-            window.open(url, '_blank');
-        }
-
-        function handleCollect(event, form) {
-            event.preventDefault();
-            
-            showConfirm('Is the waste collected?', () => {
-                const hiddenInput = document.createElement('input');
-                hiddenInput.type = 'hidden';
-                hiddenInput.name = 'collect_pickup';
-                hiddenInput.value = '1';
-                form.appendChild(hiddenInput);
-                form.submit();
+                if (actionsDiv) actionsDiv.style.display = 'flex';
+                
+                body.innerHTML = data.map(notif => `
+                    <div class="notification-item-wrapper ${!notif.is_read ? 'unread' : ''}">
+                        <input type="checkbox" 
+                               class="notification-checkbox" 
+                               name="notification_ids[]" 
+                               value="${notif.id}"
+                               onclick="event.stopPropagation();" 
+                               onchange="updateDeleteButton()">
+                        <div class="notification-content" onclick="handleNotifClick(event, ${notif.id})">
+                            <div class="notification-title">${escapeHtml(notif.title)}</div>
+                            <div class="notification-message">${escapeHtml(notif.message)}</div>
+                            <div class="notification-time">${escapeHtml(notif.created_at)}</div>
+                        </div>
+                        <button type="button" 
+                                class="notification-delete-btn" 
+                                onclick="event.stopPropagation(); deleteNotification(${notif.id})"
+                                title="Delete notification">
+                            ×
+                        </button>
+                    </div>
+                `).join('');
+                
+                disableSelectionMode();
+            })
+            .catch(error => {
+                console.error('Fetch error:', error);
+                body.innerHTML = `<div class="notification-empty">Error loading notifications: ${error.message}</div>`;
+                if (actionsDiv) actionsDiv.style.display = 'none';
             });
-            
+    }
+
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    function showAllNotifications() {
+        const modal = document.getElementById('allNotificationsModal');
+        const dropdown = document.getElementById('notificationDropdown');
+        
+        if (modal) {
+            modal.classList.add('show');
+            fetchAllNotifications();
+        }
+        
+        if (dropdown) {
+            dropdown.classList.remove('show');
+        }
+    }
+
+    function closeAllNotifications() {
+        const modal = document.getElementById('allNotificationsModal');
+        if (modal) {
+            modal.classList.remove('show');
+        }
+        disableSelectionMode();
+    }
+
+    function toggleNotifications() {
+        const dropdown = document.getElementById('notificationDropdown');
+        if (dropdown) {
+            dropdown.classList.toggle('show');
+        }
+    }
+
+    function markAllRead() {
+        showConfirm('Mark all notifications as read?', () => {
+            window.location.href = 'driver_dashboard.php?mark_all_read=1';
+        });
+    }
+
+    function markAsRead(notifId) {
+        window.location.href = `driver_dashboard.php?mark_read=1&notif_id=${notifId}`;
+    }
+
+    function deleteNotification(notifId) {
+        showConfirm('Delete this notification?', () => {
+            window.location.href = `driver_dashboard.php?delete_notif=${notifId}`;
+        });
+    }
+
+    let selectionModeActive = false;
+
+    function enableSelectionMode() {
+        selectionModeActive = true;
+        
+        const checkboxes = document.querySelectorAll('.modal-body .notification-checkbox');
+        const selectModeBtn = document.getElementById('selectModeBtn');
+        const selectAllLabel = document.getElementById('selectAllLabel');
+        const cancelBtn = document.getElementById('cancelSelectBtn');
+        const modalBody = document.getElementById('allNotificationsBody');
+        
+        checkboxes.forEach(cb => cb.classList.add('show'));
+        
+        if (selectModeBtn) selectModeBtn.style.display = 'none';
+        if (selectAllLabel) selectAllLabel.classList.add('show');
+        if (cancelBtn) cancelBtn.style.display = 'inline-block';
+        if (modalBody) modalBody.classList.add('selection-mode-active');
+        
+        updateDeleteButton();
+    }
+
+    function disableSelectionMode() {
+        selectionModeActive = false;
+        
+        const checkboxes = document.querySelectorAll('.modal-body .notification-checkbox');
+        const selectAll = document.getElementById('selectAllNotifications');
+        const selectModeBtn = document.getElementById('selectModeBtn');
+        const selectAllLabel = document.getElementById('selectAllLabel');
+        const cancelBtn = document.getElementById('cancelSelectBtn');
+        const deleteBtn = document.getElementById('deleteSelectedBtn');
+        const selectedCount = document.getElementById('selectedCount');
+        const modalBody = document.getElementById('allNotificationsBody');
+        
+        checkboxes.forEach(cb => {
+            cb.classList.remove('show');
+            cb.checked = false;
+        });
+        
+        if (selectAll) selectAll.checked = false;
+        if (selectModeBtn) selectModeBtn.style.display = 'inline-block';
+        if (selectAllLabel) selectAllLabel.classList.remove('show');
+        if (cancelBtn) cancelBtn.style.display = 'none';
+        if (deleteBtn) deleteBtn.classList.remove('show');
+        if (selectedCount) selectedCount.textContent = '';
+        if (modalBody) modalBody.classList.remove('selection-mode-active');
+    }
+
+    function toggleSelectAll() {
+        const selectAll = document.getElementById('selectAllNotifications');
+        const checkboxes = document.querySelectorAll('.modal-body .notification-checkbox');
+        
+        if (selectAll && checkboxes) {
+            checkboxes.forEach(cb => cb.checked = selectAll.checked);
+            updateDeleteButton();
+        }
+    }
+
+    function updateDeleteButton() {
+        if (!selectionModeActive) return;
+        
+        const checkboxes = document.querySelectorAll('.modal-body .notification-checkbox');
+        const checkedBoxes = document.querySelectorAll('.modal-body .notification-checkbox:checked');
+        const deleteBtn = document.getElementById('deleteSelectedBtn');
+        const selectedCount = document.getElementById('selectedCount');
+        const selectAll = document.getElementById('selectAllNotifications');
+        
+        if (checkedBoxes.length > 0) {
+            if (deleteBtn) deleteBtn.classList.add('show');
+            if (selectedCount) selectedCount.textContent = `${checkedBoxes.length} selected`;
+        } else {
+            if (deleteBtn) deleteBtn.classList.remove('show');
+            if (selectedCount) selectedCount.textContent = '';
+        }
+        
+        if (selectAll && checkboxes.length > 0) {
+            selectAll.checked = checkedBoxes.length === checkboxes.length;
+            selectAll.indeterminate = checkedBoxes.length > 0 && checkedBoxes.length < checkboxes.length;
+        }
+    }
+
+    function handleNotifClick(event, notifId) {
+        if (selectionModeActive) {
+            const wrapper = event.currentTarget.closest('.notification-item-wrapper');
+            const checkbox = wrapper.querySelector('.notification-checkbox');
+            if (checkbox) {
+                checkbox.checked = !checkbox.checked;
+                updateDeleteButton();
+            }
+        } else {
+            markAsRead(notifId);
+        }
+    }
+
+    function confirmDeleteSelected(event) {
+        event.preventDefault();
+
+        const checkedBoxes = document.querySelectorAll('.modal-body .notification-checkbox:checked');
+
+        if (checkedBoxes.length === 0) {
+            showAlert("Please select at least one notification.", 'warning');
             return false;
         }
 
-        <?php if($message): ?>
-            if(window.showAlert) {
-                showAlert("<?= addslashes($message) ?>", "<?= $message_type ?>");
+        const form = document.getElementById('deleteNotificationsForm');
+        
+        showConfirm(`Delete ${checkedBoxes.length} selected notification(s)?`, () => {
+            const input = document.createElement('input');
+            input.type = 'hidden';
+            input.name = 'delete_notifications';
+            input.value = '1';
+            form.appendChild(input);
+            form.submit();
+        });
+
+        return false;
+    }
+
+    document.addEventListener('click', function(event) {
+        const dropdown = document.getElementById('notificationDropdown');
+        const bell = document.querySelector('.notification-bell');
+        
+        if (dropdown && bell && !bell.contains(event.target) && !dropdown.contains(event.target)) {
+            dropdown.classList.remove('show');
+        }
+    });
+
+    document.getElementById('allNotificationsModal')?.addEventListener('click', function(event) {
+        if (event.target === this) {
+            closeAllNotifications();
+        }
+    });
+
+    function showLocationModal(lat, lng, userName, address) {
+        document.getElementById('locationModal').style.display = 'flex';
+        document.getElementById('modalTitle').textContent = `Pickup Location: ${userName}`;
+        document.getElementById('modalSubtitle').textContent = `📍 ${address}`;
+        
+        setTimeout(() => {
+            if (!viewMapInstance) {
+                viewMapInstance = L.map('viewMap').setView([lat, lng], 16);
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    attribution: '© OpenStreetMap contributors',
+                    maxZoom: 19
+                }).addTo(viewMapInstance);
             } else {
-                alert("<?= addslashes($message) ?>");
+                viewMapInstance.setView([lat, lng], 16);
+                if (viewMarker) {
+                    viewMapInstance.removeLayer(viewMarker);
+                }
             }
-        <?php endif; ?>
-    </script>
+            
+            viewMarker = L.marker([lat, lng]).addTo(viewMapInstance)
+                .bindPopup(`<b>${userName}</b><br>${address}`)
+                .openPopup();
+            
+            setTimeout(() => viewMapInstance.invalidateSize(), 100);
+        }, 100);
+    }
+
+    function closeLocationModal() {
+        document.getElementById('locationModal').style.display = 'none';
+    }
+
+    function openGoogleMapsDirections(lat, lng) {
+        const url = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`;
+        window.open(url, '_blank');
+    }
+
+    // UPDATED: Fixed verification code validation
+function handleCollect(pickupId) {
+    const form = document.getElementById('collectForm_' + pickupId);
+    const codeInput = document.getElementById('verification_code_' + pickupId);
+    
+    if (!codeInput || !form) {
+        showAlert('Form elements not found!', 'error');
+        return false;
+    }
+    
+    const code = codeInput.value.trim();
+    
+    // Validation
+    if (!code) {
+        showAlert('Please enter the verification code!', 'warning');
+        codeInput.focus();
+        return false;
+    }
+    
+    if (code.length !== 4) {
+        showAlert('Verification code must be exactly 4 digits!', 'error');
+        codeInput.focus();
+        codeInput.select();
+        return false;
+    }
+    
+    if (!/^\d{4}$/.test(code)) {
+        showAlert('Verification code must contain only numbers!', 'error');
+        codeInput.focus();
+        codeInput.select();
+        return false;
+    }
+    
+    // Show confirmation dialog
+    showConfirm(`Confirm collection with verification code: <strong>${code}</strong>?`, () => {
+        form.submit();
+    });
+    
+    return false;
+}
+// Moves focus to the next box automatically
+function moveFocus(element) {
+    if (element.value.length === 1) {
+        let next = element.nextElementSibling;
+        if (next && next.classList.contains('otp-input')) {
+            next.focus();
+        }
+    }
+}
+
+// Handles deleting digits and moving focus back
+function handleBackspace(event, element) {
+    if (event.key === "Backspace" && element.value.length === 0) {
+        let prev = element.previousElementSibling;
+        if (prev && prev.classList.contains('otp-input')) {
+            prev.focus();
+        }
+    }
+}
+
+// Combines the 4 digits and submits the form
+function submitVerifiedCollection(pickupId) {
+    const wrapper = document.querySelector(`.otp-wrapper[data-pickup-id="${pickupId}"]`);
+    const inputs = wrapper.querySelectorAll('.otp-input');
+    let fullCode = "";
+    
+    inputs.forEach(input => fullCode += input.value);
+
+    if (fullCode.length !== 4 || !/^\d{4}$/.test(fullCode)) {
+        showAlert("Please enter a valid 4-digit code", "error");
+        return;
+    }
+
+    // Set the hidden input value and submit
+    document.getElementById('final_code_' + pickupId).value = fullCode;
+    
+    showConfirm(`Verify collection with code: ${fullCode}?`, () => {
+        document.getElementById('collectForm_' + pickupId).submit();
+    });
+}
+    console.log('All scripts loaded successfully');
+</script>
 </body>
 </html>
 <?php 

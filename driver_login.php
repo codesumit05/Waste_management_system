@@ -3,11 +3,12 @@ require 'db.php';
 
 $error_message = '';
 if ($_SERVER["REQUEST_METHOD"] == "POST") {
-    $email = $_POST['email'];
+    $identifier = $_POST['identifier']; // Can be email or mobile
     $password = $_POST['password'];
 
-    $stmt = $conn->prepare("SELECT id, name, password FROM drivers WHERE email = ?");
-    $stmt->bind_param("s", $email);
+    // Check both email OR mobile specifically for drivers
+    $stmt = $conn->prepare("SELECT id, name, password FROM drivers WHERE email = ? OR mobile = ?");
+    $stmt->bind_param("ss", $identifier, $identifier);
     $stmt->execute();
     $result = $stmt->get_result();
 
@@ -22,7 +23,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             $error_message = "Invalid password.";
         }
     } else {
-        $error_message = "No driver found with that email.";
+        $error_message = "No driver found with that email or mobile.";
     }
     $stmt->close();
 }
@@ -144,9 +145,9 @@ $conn->close();
             
             <form action="driver_login.php" method="post">
                 <div class="input-group">
-                    <label for="email">Email</label>
-                    <input type="email" id="email" name="email" required>
-                </div>
+    <label for="identifier">Email or Mobile Number</label>
+    <input type="text" id="identifier" name="identifier" required placeholder="Enter Email or Registered Mobile">
+</div>
                 <div class="input-group">
                     <label for="password">Password</label>
                     <input type="password" id="password" name="password" required>

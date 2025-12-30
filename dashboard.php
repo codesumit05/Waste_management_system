@@ -54,22 +54,47 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['pickup_date'])) {
     $waste_type = $_POST['waste_type'];
     $latitude = isset($_POST['latitude']) ? $_POST['latitude'] : null;
     $longitude = isset($_POST['longitude']) ? $_POST['longitude'] : null;
+    
+    // Generate unique 4-digit verification code
+    $verification_code = str_pad(rand(0, 9999), 4, '0', STR_PAD_LEFT);
+    
+    // Check if code already exists for active pickups, regenerate if needed
+    $code_check = $conn->prepare("SELECT id FROM pickups WHERE verification_code = ? AND status NOT IN ('Completed', 'Cancelled')");
+    $code_check->bind_param("s", $verification_code);
+    $code_check->execute();
+    $result = $code_check->get_result();
+    
+    // Keep regenerating until we get a unique code
+    while ($result->num_rows > 0) {
+        $verification_code = str_pad(rand(0, 9999), 4, '0', STR_PAD_LEFT);
+        $code_check->bind_param("s", $verification_code);
+        $code_check->execute();
+        $result = $code_check->get_result();
+    }
+    $code_check->close();
 
-    $stmt = $conn->prepare("INSERT INTO pickups (user_id, area, city, pickup_date, time_slot, waste_type, latitude, longitude) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
-    $stmt->bind_param("isssssdd", $user_id, $area, $city, $pickup_date, $time_slot, $waste_type, $latitude, $longitude);
+    $stmt = $conn->prepare("INSERT INTO pickups (user_id, area, city, pickup_date, time_slot, waste_type, latitude, longitude, verification_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    $stmt->bind_param("isssssdds", $user_id, $area, $city, $pickup_date, $time_slot, $waste_type, $latitude, $longitude, $verification_code);
     
     if($stmt->execute()){
         // Notify Admin about new pickup request
         $user_name = $_SESSION['user_name'];
         $notif_title = "New Pickup Request";
-        $notif_message = "User $user_name has scheduled a new pickup in $area, $city for $pickup_date ($time_slot).";
+        $notif_message = "User $user_name has scheduled a new pickup in $area, $city for $pickup_date ($time_slot). Verification Code: $verification_code";
         $admin_notif = $conn->prepare("INSERT INTO notifications (admin_id, title, message, type) SELECT id, ?, ?, 'info' FROM users WHERE is_admin = TRUE LIMIT 1");
         $admin_notif->bind_param("ss", $notif_title, $notif_message);
         $admin_notif->execute();
         $admin_notif->close();
         
+        // Notify user with verification code
+        $user_notif_message = "Your pickup has been scheduled for $pickup_date ($time_slot). Your verification code is: $verification_code. Please share this code with the driver during collection.";
+        $user_notif = $conn->prepare("INSERT INTO notifications (user_id, title, message, type) VALUES (?, 'Pickup Scheduled', ?, 'success')");
+        $user_notif->bind_param("is", $user_id, $user_notif_message);
+        $user_notif->execute();
+        $user_notif->close();
+        
         // Redirect to prevent resubmission
-        $_SESSION['success_message'] = "Pickup scheduled successfully with location!";
+        $_SESSION['success_message'] = "Pickup scheduled successfully! Your verification code is: <strong>$verification_code</strong>. Please keep it safe.";
         header("Location: dashboard.php");
         exit();
     } else {
@@ -128,8 +153,8 @@ $stmt_unread->execute();
 $unread_count = $stmt_unread->get_result()->fetch_assoc()['count'];
 $stmt_unread->close();
 
-// Fetch upcoming pickups - Updated to include 'Out for Pickup'
-$upcoming_sql = "SELECT id, pickup_date, time_slot, waste_type, status, latitude, longitude, driver_id FROM pickups 
+// Fetch upcoming pickups - Updated to include verification_code
+$upcoming_sql = "SELECT id, pickup_date, time_slot, waste_type, status, latitude, longitude, driver_id, verification_code FROM pickups 
                  WHERE user_id = ? AND status IN ('Scheduled', 'Assigned', 'Out for Pickup') AND pickup_date >= CURDATE()
                  ORDER BY pickup_date ASC";
 $stmt_upcoming = $conn->prepare($upcoming_sql);
@@ -143,7 +168,8 @@ $show_all_history = isset($_GET['show_all_history']) ? true : false;
 $history_limit = $show_all_history ? "" : "LIMIT 3";
 
 // Fetch pickup history
-$history_sql = "SELECT id, pickup_date, time_slot, waste_type, status, driver_id FROM pickups 
+// UPDATED History Query in dashboard.php
+$history_sql = "SELECT id, pickup_date, time_slot, waste_type, status, driver_id, latitude, longitude FROM pickups 
                 WHERE user_id = ? AND status IN ('Completed', 'Cancelled', 'Collected', 'Collected by Driver')
                 ORDER BY updated_at DESC $history_limit";
 $stmt_history = $conn->prepare($history_sql);
@@ -886,6 +912,7 @@ function getStatusStep($status) {
                 font-size: 0.6rem;
             }
         }
+
     </style>
 </head>
 <body>
@@ -982,6 +1009,7 @@ function getStatusStep($status) {
         class="btn-delete-selected" 
         id="deleteSelectedBtn"
         name="delete_notifications"
+        onclick = "confirmDeleteSelected(event)"
         >Delete Selected</button>
                 
                 <span class="notification-count" id="selectedCount"></span>
@@ -1020,15 +1048,23 @@ function getStatusStep($status) {
                                         <small>🗑️ <?= htmlspecialchars($row['waste_type']) ?></small>
                                     </td>
                                     <td data-label="Current Status">
-                                        <span class="status-badge status-<?= strtolower(str_replace(' ', '-', $row['status'])) ?>">
-                                            <?= htmlspecialchars($row['status']) ?>
-                                        </span>
-                                        <?php if ($row['latitude'] && $row['longitude']): ?>
-                                            <div style="margin-top: 8px;">
-                                                <button class="btn-collect" onclick="showLocationModal(<?= $row['latitude'] ?>, <?= $row['longitude'] ?>)" style="padding: 4px 8px; font-size: 0.7rem;">📍 View Map</button>
-                                            </div>
-                                        <?php endif; ?>
-                                    </td>
+    <span class="status-badge status-<?= strtolower(str_replace(' ', '-', $row['status'])) ?>">
+        <?= htmlspecialchars($row['status']) ?>
+    </span>
+    <?php if ($row['verification_code']): ?>
+        <br>
+                    <strong style="color: var(--primary); font-size: 0.85rem; position:relative;top:7.5px;">Verification Code:</strong><br>
+        <div style="margin-top: 8px; width:65%; padding: 8px; background: linear-gradient(135deg, rgba(14, 165, 233, 0.1), rgba(139, 92, 246, 0.1)); border: 2px solid var(--primary); border-radius: 8px;">
+
+            <span style="font-size: 1.5rem; font-weight: 800; color: var(--primary); letter-spacing: 3px; font-family: 'Courier New', monospace;"><?= htmlspecialchars($row['verification_code']) ?></span>
+        </div>
+    <?php endif; ?>
+    <?php if ($row['latitude'] && $row['longitude']): ?>
+        <div style="margin-top: 8px;">
+            <button class="btn-collect" onclick="showLocationModal(<?= $row['latitude'] ?>, <?= $row['longitude'] ?>)" style="padding: 4px 8px; font-size: 0.7rem;">📍 View Map</button>
+        </div>
+    <?php endif; ?>
+</td>
                                     <td data-label="Real-time Timeline">
     <?php 
         $currentStep = getStatusStep($row['status']);
@@ -1122,10 +1158,21 @@ function getStatusStep($status) {
                                 <?php while($row = $history_result->fetch_assoc()): ?>
                                 <tr>
                                     <td data-label="Details">
-                                        <strong>📅 <?= htmlspecialchars($row['pickup_date']) ?></strong><br>
-                                        <small>⏰ <?= htmlspecialchars($row['time_slot']) ?></small><br>
-                                        <small>🗑️ <?= htmlspecialchars($row['waste_type']) ?></small>
-                                    </td>
+    <div style="display: flex; align-items: center; gap: 10px;">
+        <div>
+            <strong>📅 <?= htmlspecialchars($row['pickup_date']) ?></strong><br>
+            <small>⏰ <?= htmlspecialchars($row['time_slot']) ?></small>
+        </div>
+        <?php if ($row['latitude'] && $row['longitude']): ?>
+            <button onclick="showLocationModal(<?= $row['latitude'] ?>, <?= $row['longitude'] ?>)" 
+                    style="background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 8px; padding: 5px 10px; cursor: pointer; display: flex; flex-direction: column; align-items: center; transition: all 0.2s;">
+                <span style="font-size: 1.2rem;">📍</span>
+                <span style="font-size: 0.65rem; color: var(--primary); font-weight: bold; text-transform: uppercase;">Location</span>
+            </button>
+        <?php endif; ?>
+    </div>
+    <small>🗑️ <?= htmlspecialchars($row['waste_type']) ?></small>
+</td>
                                     <td data-label="Final Status">
                                         <span class="status-badge status-<?= strtolower(str_replace(' ', '-', $row['status'])) ?>">
                                             <?= htmlspecialchars($row['status']) ?>
@@ -1604,25 +1651,34 @@ console.log('Notification functions loaded successfully');
             }
         });
 
-        function confirmDelete(type, id, name) {
-            const message = type === 'user' 
-                ? `Are you sure you want to delete user "${name}"? This action cannot be undone.`
-                : `Are you sure you want to fire driver "${name}"? This action cannot be undone.`;
-            
-            showConfirm(message, () => {
-                const param = type === 'user' ? 'delete_user' : 'fire_driver';
-                window.location.href = `dashboard.php?${param}=${id}`;
-            });
-        }
+    function confirmDeleteSelected(event) {
+    event.preventDefault();
 
-        function handleCollectedCancel(event, form) {
+    const checkedBoxes = document.querySelectorAll(
+        '.modal-body .notification-checkbox:checked'
+    );
 
-            event.preventDefault();
-            showConfirm('Are you sure you want to cancel this pickup?', () => {
-                form.submit();
-            });
-            return false;
-        }
+    if (checkedBoxes.length === 0) {
+        showAlert("Please select at least one notification.", 'warning');
+        return false;
+    }
+
+    const form = document.getElementById('deleteNotificationsForm');
+    
+    showConfirm(`Delete ${checkedBoxes.length} selected notification(s)?`, () => {
+        // Create a temporary input to trigger the form submission with the correct button name
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = 'delete_notifications';
+        input.value = '1';
+        form.appendChild(input);
+        
+        // Submit the form
+        form.submit();
+    });
+
+    return false;
+}
 
             function handleNotifClick(event, notifId) {
     if (selectionModeActive) {

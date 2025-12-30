@@ -8,12 +8,13 @@ $message_type = '';
 if ($_SERVER["REQUEST_METHOD"] == "POST") {
     $name = $_POST['name'];
     $email = $_POST['email'];
-    // Hash the password for security
+    $mobile = $_POST['mobile']; // New field
     $password = password_hash($_POST['password'], PASSWORD_BCRYPT);
 
-    // Prepare an SQL statement to prevent SQL injection
-    $stmt = $conn->prepare("INSERT INTO users (name, email, password) VALUES (?, ?, ?)");
-    $stmt->bind_param("sss", $name, $email, $password);
+    // Updated SQL to include mobile
+    $stmt = $conn->prepare("INSERT INTO users (name, email, mobile, password) VALUES (?, ?, ?, ?)");
+    $stmt->bind_param("ssss", $name, $email, $mobile, $password);
+    // ... rest of execute logic
 
     if ($stmt->execute()) {
         $message = "Registration successful! You can now <a href='login.php' style='color: var(--primary); text-decoration: underline;'>login</a>.";
@@ -144,6 +145,10 @@ $conn->close();
                     <label for="email">Email</label>
                     <input type="email" id="email" name="email" required>
                 </div>
+                <div class="input-group">
+    <label for="mobile">Mobile Number</label>
+    <input type="text" id="mobile" name="mobile" required pattern="[0-9]{10,15}">
+</div>
                 <div class="input-group">
                     <label for="password">Password</label>
                     <input type="password" id="password" name="password" required minlength="6">

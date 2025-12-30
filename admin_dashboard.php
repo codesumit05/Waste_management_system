@@ -77,27 +77,36 @@ if (isset($_GET['delete_notif'])) {
     exit();
 }
 // Handle Create Driver form submission
+// UPDATED: Handle Create Driver with Session Messaging
 if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['create_driver'])) {
     $name = $_POST['driver_name'];
     $email = $_POST['driver_email'];
+    $mobile = $_POST['driver_mobile']; 
     $password = password_hash($_POST['driver_password'], PASSWORD_BCRYPT);
-    $stmt = $conn->prepare("INSERT INTO drivers (name, email, password) VALUES (?, ?, ?)");
-    $stmt->bind_param("sss", $name, $email, $password);
+    
+    $stmt = $conn->prepare("INSERT INTO drivers (name, email, mobile, password) VALUES (?, ?, ?, ?)");
+    $stmt->bind_param("ssss", $name, $email, $mobile, $password);
+    
     if ($stmt->execute()) {
-        $success_message = "Driver created successfully!";
+        // Store in SESSION so it survives the redirect
+        $_SESSION['success_message'] = "Driver $name created successfully!";
         
+        // Notifications...
         $driver_id = $conn->insert_id;
-        $notif_stmt = $conn->prepare("INSERT INTO notifications (driver_id, title, message, type) VALUES (?, 'Welcome to EcoWaste', 'You have been registered as a driver. You will receive pickup assignments soon.', 'info')");
+        $notif_stmt = $conn->prepare("INSERT INTO notifications (driver_id, title, message, type) VALUES (?, 'Welcome', 'Account registered.', 'info')");
         $notif_stmt->bind_param("i", $driver_id);
         $notif_stmt->execute();
-        $notif_stmt->close();
-        
+
         $admin_notif = $conn->prepare("INSERT INTO notifications (admin_id, title, message, type) VALUES (?, 'New Driver Added', 'Driver $name has been successfully added to the system.', 'success')");
         $admin_notif->bind_param("i", $admin_id);
         $admin_notif->execute();
         $admin_notif->close();
     } else {
-        $error_message = "Error creating driver.";
+        if ($conn->errno == 1062) {
+            $_SESSION['error_message'] = "Error: Email or Mobile already exists.";
+        } else {
+            $_SESSION['error_message'] = "Database Error: " . $stmt->error;
+        }
     }
     $stmt->close();
     header("Location: admin_dashboard.php");
@@ -307,19 +316,19 @@ $drivers_result = $conn->query("SELECT id, name FROM drivers WHERE is_deleted = 
 $drivers_list = $drivers_result->fetch_all(MYSQLI_ASSOC);
 
 // Fetch active users
-$users_sql = "SELECT name, email, created_at, id FROM users WHERE is_admin = FALSE AND is_deleted = FALSE ORDER BY created_at DESC";
+$users_sql = "SELECT name, email, mobile, created_at, id FROM users WHERE is_admin = FALSE AND is_deleted = FALSE ORDER BY created_at DESC";
 $users_result = $conn->query($users_sql);
 
 // Fetch deleted users
-$deleted_users_sql = "SELECT name, email, created_at, deleted_at, id FROM users WHERE is_admin = FALSE AND is_deleted = TRUE ORDER BY deleted_at DESC";
+$deleted_users_sql = "SELECT name, email, mobile, created_at, deleted_at, id FROM users WHERE is_admin = FALSE AND is_deleted = TRUE ORDER BY deleted_at DESC";
 $deleted_users_result = $conn->query($deleted_users_sql);
 
 // Fetch active drivers
-$all_drivers_sql = "SELECT name, email, created_at, id FROM drivers WHERE is_deleted = FALSE ORDER BY created_at DESC";
+$all_drivers_sql = "SELECT name, email, mobile, created_at, id FROM drivers WHERE is_deleted = FALSE ORDER BY created_at DESC";
 $all_drivers_result = $conn->query($all_drivers_sql);
 
 // Fetch fired drivers
-$fired_drivers_sql = "SELECT name, email, created_at, deleted_at, id FROM drivers WHERE is_deleted = TRUE ORDER BY deleted_at DESC";
+$fired_drivers_sql = "SELECT name, email, mobile, created_at, deleted_at, id FROM drivers WHERE is_deleted = TRUE ORDER BY deleted_at DESC";
 $fired_drivers_result = $conn->query($fired_drivers_sql);
 ?>
 <!DOCTYPE html>
@@ -334,6 +343,56 @@ $fired_drivers_result = $conn->query($fired_drivers_sql);
     <link rel="stylesheet" href="theme.css?v=2">
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap" rel="stylesheet">
     <style>
+        /* Center align headers and cells for ALL admin tables */
+.table-container th, 
+.table-container td {
+    text-align: center;
+    vertical-align: middle;
+}
+
+/* Ensure forms and selection boxes inside table cells are centered */
+.status-form {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+}
+
+/* Specific styling for the Action column buttons to keep them centered */
+.table-container td[data-label="Action"] {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 0.8rem;
+    flex-wrap: wrap; /* Allows buttons to wrap on smaller screens */
+}
+
+/* Mobile Responsive adjustment: Keep labels left, values right */
+@media (max-width: 768px) {
+    .table-container td {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        text-align: right;
+        padding-left: 50%; /* Space for the label */
+        position: relative;
+    }
+    
+    .table-container td::before {
+        content: attr(data-label);
+        position: absolute;
+        left: 1rem;
+        width: 45%;
+        text-align: left;
+        font-weight: 700;
+        color: var(--primary);
+    }
+    
+    .status-form {
+        justify-content: flex-end;
+    }
+}
         .btn-delete {
             background: linear-gradient(135deg, #ef4444, #dc2626);
             color: white;
@@ -939,10 +998,14 @@ $fired_drivers_result = $conn->query($fired_drivers_sql);
                     <span>Select All</span>
                 </label>
                 
-                <button type="submit" 
-        class="btn-delete-selected" 
-        id="deleteSelectedBtn" 
-        name="delete_notifications">Delete Selected</button>
+                <button type="submit"
+        class="btn-delete-selected"
+        id="deleteSelectedBtn"
+        name= "delete_notifications"
+        onclick="confirmDeleteSelected(event)">
+    Delete Selected
+</button>
+
                 
                 <span class="notification-count" id="selectedCount"></span>
             </div>
@@ -1266,24 +1329,28 @@ $fired_drivers_result = $conn->query($fired_drivers_sql);
         </div>
 
         <!-- Add Driver Sub-tab -->
-        <div id="add-driver-subtab" class="sub-tab-content">
-            <form action="admin_dashboard.php" method="post" class="pickup-form" onsubmit="return validateDriverForm(this)">
-                <h3 style="grid-column: 1 / -1;">Create New Driver</h3>
-                <div class="form-group">
-                    <label for="driver_name">Driver Name</label>
-                    <input type="text" id="driver_name" name="driver_name" required>
-                </div>
-                <div class="form-group">
-                    <label for="driver_email">Driver Email</label>
-                    <input type="email" id="driver_email" name="driver_email" required>
-                </div>
-                <div class="form-group">
-                    <label for="driver_password">Password</label>
-                    <input type="password" id="driver_password" name="driver_password" required>
-                </div>
-                <button type="submit" name="create_driver" class="btn btn-primary" style="grid-column: 1 / -1;">Add Driver</button>
-            </form>
+<div id="add-driver-subtab" class="sub-tab-content">
+    <form action="admin_dashboard.php" method="post" class="pickup-form" onsubmit="return validateDriverForm(this)">
+        <h3 style="grid-column: 1 / -1;">Create New Driver</h3>
+        <div class="form-group">
+            <label for="driver_name">Driver Name</label>
+            <input type="text" id="driver_name" name="driver_name" required>
         </div>
+        <div class="form-group">
+            <label for="driver_email">Driver Email</label>
+            <input type="email" id="driver_email" name="driver_email" required>
+        </div>
+        <div class="form-group">
+            <label for="driver_mobile">Mobile Number</label>
+            <input type="text" id="driver_mobile" name="driver_mobile" required pattern="[0-9]{10,15}" placeholder="e.g. 9876543210">
+        </div>
+        <div class="form-group">
+            <label for="driver_password">Password</label>
+            <input type="password" id="driver_password" name="driver_password" required>
+        </div>
+        <button type="submit" name="create_driver" class="btn btn-primary" style="grid-column: 1 / -1;">Add Driver</button>
+    </form>
+</div>
 
         <!-- Driver List Sub-tab -->
         <div id="driver-list-subtab" class="sub-tab-content active">
@@ -1300,6 +1367,7 @@ $fired_drivers_result = $conn->query($fired_drivers_sql);
                         <tr>
                             <th>Name</th>
                             <th>Email</th>
+                            <th>Mobile</th>
                             <th>Registration Date</th>
                             <th>Action</th>
                         </tr>
@@ -1311,6 +1379,7 @@ $fired_drivers_result = $conn->query($fired_drivers_sql);
                             <tr>
                                 <td data-label="Name"><?= htmlspecialchars($row['name']) ?></td>
                                 <td data-label="Email"><?= htmlspecialchars($row['email']) ?></td>
+                                <td data-label="Mobile"><?= htmlspecialchars($row['mobile']) ?>
                                 <td data-label="Registration Date"><?= date("M j, Y", strtotime($row['created_at'])) ?></td>
                                 <td data-label="Action">
                                     <button class="btn-delete" onclick="confirmDelete('driver', <?= $row['id'] ?>, '<?= htmlspecialchars($row['name']) ?>')">Fire Driver</button>
@@ -1343,6 +1412,7 @@ $fired_drivers_result = $conn->query($fired_drivers_sql);
                         <tr>
                             <th>Name</th>
                             <th>Email</th>
+                            <th>Mobile</th>
                             <th>Registration Date</th>
                             <th>Fired Date</th>
                             <th>Action</th>
@@ -1354,6 +1424,7 @@ $fired_drivers_result = $conn->query($fired_drivers_sql);
                             <tr>
                                 <td data-label="Name"><?= htmlspecialchars($row['name']) ?></td>
                                 <td data-label="Email"><?= htmlspecialchars($row['email']) ?></td>
+                                <td data-label="Mobile"><?= htmlspecialchars($row['mobile']) ?></td>
                                 <td data-label="Registration Date"><?= date("M j, Y", strtotime($row['created_at'])) ?></td>
                                 <td data-label="Fired Date"><?= date("M j, Y", strtotime($row['deleted_at'])) ?></td>
                                 <td data-label="Action">
@@ -1400,6 +1471,7 @@ $fired_drivers_result = $conn->query($fired_drivers_sql);
                         <tr>
                             <th>Name</th>
                             <th>Email</th>
+                            <th>Mobile</th>
                             <th>Registration Date</th>
                             <th>Action</th>
                         </tr>
@@ -1410,6 +1482,7 @@ $fired_drivers_result = $conn->query($fired_drivers_sql);
                             <tr>
                                 <td data-label="Name"><?= htmlspecialchars($row['name']) ?></td>
                                 <td data-label="Email"><?= htmlspecialchars($row['email']) ?></td>
+                                <td data-label="Mobile"><?= htmlspecialchars($row['mobile']) ?></td>
                                 <td data-label="Registration Date"><?= date("M j, Y", strtotime($row['created_at'])) ?></td>
                                 <td data-label="Action">
                                     <button class="btn-delete" onclick="confirmDelete('user', <?= $row['id'] ?>, '<?= htmlspecialchars($row['name']) ?>')">Delete User</button>
@@ -1442,6 +1515,7 @@ $fired_drivers_result = $conn->query($fired_drivers_sql);
                         <tr>
                             <th>Name</th>
                             <th>Email</th>
+                            <th>Mobile</th>
                             <th>Registration Date</th>
                             <th>Deleted Date</th>
                             <th>Action</th>
@@ -1453,6 +1527,7 @@ $fired_drivers_result = $conn->query($fired_drivers_sql);
                             <tr>
                                 <td data-label="Name"><?= htmlspecialchars($row['name']) ?></td>
                                 <td data-label="Email"><?= htmlspecialchars($row['email']) ?></td>
+                                <td data-label="Mobile"><?= htmlspecialchars($row['mobile']) ?></td>
                                 <td data-label="Registration Date"><?= date("M j, Y", strtotime($row['created_at'])) ?></td>
                                 <td data-label="Deleted Date"><?= date("M j, Y", strtotime($row['deleted_at'])) ?></td>
                                 <td data-label="Action">
@@ -1489,21 +1564,26 @@ function searchTable(searchInputId, tableId) {
     let visibleCount = 0;
     
     for (let i = 0; i < rows.length; i++) {
-        // Skip "no data" rows
+        // Skip "no data" placeholder rows (rows with 1 cell spanning the whole table)
         if (rows[i].cells.length === 1 && rows[i].cells[0].getAttribute('colspan')) {
             rows[i].style.display = 'none';
             continue;
         }
         
+        // Target Name (Index 0), Email (Index 1), and Mobile (Index 2)
         const nameCell = rows[i].cells[0];
         const emailCell = rows[i].cells[1];
+        const mobileCell = rows[i].cells[2];
         
-        if (nameCell && emailCell) {
-            const nameText = nameCell.textContent || nameCell.innerText;
-            const emailText = emailCell.textContent || emailCell.innerText;
+        if (nameCell && emailCell && mobileCell) {
+            const nameText = (nameCell.textContent || nameCell.innerText).toUpperCase();
+            const emailText = (emailCell.textContent || emailCell.innerText).toUpperCase();
+            const mobileText = (mobileCell.textContent || mobileCell.innerText).toUpperCase();
             
-            if (nameText.toUpperCase().indexOf(filter) > -1 || 
-                emailText.toUpperCase().indexOf(filter) > -1) {
+            // Show row if query matches any of the three fields
+            if (nameText.indexOf(filter) > -1 || 
+                emailText.indexOf(filter) > -1 ||
+                mobileText.indexOf(filter) > -1) {
                 rows[i].style.display = '';
                 visibleCount++;
             } else {
@@ -1512,13 +1592,13 @@ function searchTable(searchInputId, tableId) {
         }
     }
     
-    // Show/hide no results message
+    // Manage visibility of the 'No Results' message container
     if (visibleCount === 0 && filter !== '') {
         table.style.display = 'none';
-        noResults.style.display = 'block';
+        if (noResults) noResults.style.display = 'block';
     } else {
         table.style.display = '';
-        noResults.style.display = 'none';
+        if (noResults) noResults.style.display = 'none';
     }
 }
 
@@ -1533,6 +1613,7 @@ function confirmRestore(type, id, name) {
         window.location.href = `admin_dashboard.php?${param}=${id}`;
     });
 }
+
         function switchMainTab(tabName) {
             document.querySelectorAll('.main-tab').forEach(tab => tab.classList.remove('active'));
             document.querySelectorAll('.main-tab-content').forEach(content => content.classList.remove('active'));
@@ -1802,6 +1883,36 @@ function toggleSelectAll() {
         updateDeleteButton();
     }
 }
+function confirmDeleteSelected(event) {
+    event.preventDefault();
+
+    const checkedBoxes = document.querySelectorAll(
+        '.modal-body .notification-checkbox:checked'
+    );
+
+    if (checkedBoxes.length === 0) {
+        showAlert("Please select at least one notification.", 'warning');
+        return false;
+    }
+
+    const form = document.getElementById('deleteNotificationsForm');
+    
+    showConfirm(`Delete ${checkedBoxes.length} selected notification(s)?`, () => {
+        // Create a temporary input to trigger the form submission with the correct button name
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = 'delete_notifications';
+        input.value = '1';
+        form.appendChild(input);
+        
+        // Submit the form
+        form.submit();
+    });
+
+    return false;
+}
+
+
 
 // Update delete button state
 function updateDeleteButton() {
@@ -1840,6 +1951,7 @@ function handleNotifClick(event, notifId) {
         markAsRead(notifId);
     }
 }
+
 
 document.addEventListener('click', function(event) {
     const dropdown = document.getElementById('notificationDropdown');
@@ -1903,18 +2015,19 @@ console.log('Notification functions loaded successfully');
             return true;
         }
 
-        function validateDriverForm(form) {
-            const name = form.querySelector('#driver_name').value.trim();
-            const email = form.querySelector('#driver_email').value.trim();
-            const password = form.querySelector('#driver_password').value.trim();
-            
-            if (!name || !email || !password) {
-                showAlert('All fields are required', 'warning');
-                return false;
-            }
-            
-            return true;
-        }
+function validateDriverForm(form) {
+    const name = form.querySelector('#driver_name').value.trim();
+    const email = form.querySelector('#driver_email').value.trim();
+    const mobile = form.querySelector('#driver_mobile').value.trim(); // Added
+    const password = form.querySelector('#driver_password').value.trim();
+    
+    if (!name || !email || !mobile || !password) {
+        showAlert('All fields (including mobile) are required', 'warning');
+        return false;
+    }
+    
+    return true;
+}
     function handleNotifClick(event, notifId) {
     if (selectionModeActive) {
         // Toggle the checkbox for this item instead of navigating
@@ -1927,6 +2040,16 @@ console.log('Notification functions loaded successfully');
         markAsRead(notifId);
     }
 }
+// Add this inside your <script> tag
+window.addEventListener('DOMContentLoaded', function() {
+    <?php if (!empty($success_message)): ?>
+        showAlert("<?= addslashes($success_message) ?>", "success");
+    <?php endif; ?>
+
+    <?php if (!empty($error_message)): ?>
+        showAlert("<?= addslashes($error_message) ?>", "error");
+    <?php endif; ?>
+});
 
     </script>
 </body>

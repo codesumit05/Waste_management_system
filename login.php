@@ -4,14 +4,15 @@ require 'db.php'; // Include the database connection
 $error_message = '';
 // Check if form is submitted
 if ($_SERVER["REQUEST_METHOD"] == "POST") {
-    $email = $_POST['email'];
+    $identifier = $_POST['identifier']; // Changed from $email to $identifier
     $password = $_POST['password'];
 
-    // Prepare and execute the query
-    $stmt = $conn->prepare("SELECT id, name, password FROM users WHERE email = ?");
-    $stmt->bind_param("s", $email);
+    // Check both email OR mobile
+    $stmt = $conn->prepare("SELECT id, name, password FROM users WHERE email = ? OR mobile = ?");
+    $stmt->bind_param("ss", $identifier, $identifier);
     $stmt->execute();
     $result = $stmt->get_result();
+    // ... rest of verify logic
 
     if ($result->num_rows == 1) {
         $user = $result->fetch_assoc();
@@ -136,9 +137,9 @@ $conn->close();
 
             <form action="login.php" method="post">
                 <div class="input-group">
-                    <label for="email">Email</label>
-                    <input type="email" id="email" name="email" required>
-                </div>
+    <label for="identifier">Email or Mobile Number</label>
+    <input type="text" id="identifier" name="identifier" required placeholder="example@mail.com or 9876543210">
+</div>
                 <div class="input-group">
                     <label for="password">Password</label>
                     <input type="password" id="password" name="password" required>
